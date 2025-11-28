@@ -2,7 +2,7 @@ from openai import OpenAI
 import streamlit as st
 import json
 
-model_name = "gpt-4o"
+model_name = "gpt-5.1"
 
 assistant_prompt = """
 You are a helpful assistant that provides accurate and concise information
