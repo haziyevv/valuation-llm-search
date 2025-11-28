@@ -18,7 +18,7 @@ Output format (strict JSON):
   "min_price": NUMERIC VALUE ONLY,
   "max_price": NUMERIC VALUE ONLY,
   "source_urls": [LIST OF URL STRINGS ONLY],
-  "unit_of_measure": "STRING VALUE ONLY"
+  "unit_of_measure": "quantity unit of measure string"
 }}
 """
 
