@@ -1,1 +1,78 @@
-# valuation-llm-search
+# Price Research Agent
+
+International trade price prediction with ISO compliance (ISO3166 countries, ISO4217 currencies).
+
+## Features
+
+- Web search for real-time market prices
+- Country of origin research tracking (`coo_research` flag)
+- Wholesale/retail discrimination based on quantity
+- Currency conversion with USD fallback
+- Confidence scoring (0.0-1.0)
+
+## Setup
+
+```bash
+pip install -r requirements.txt
+```
+
+Create `.env`:
+```env
+OPENAI_API_KEY=your_api_key
+```
+
+Run:
+```bash
+streamlit run app.py
+```
+
+## API Usage
+
+```python
+from price_agent import PriceResearchAgent
+
+agent = PriceResearchAgent()
+result = agent.research_price(
+    country_of_origin="QA",        # ISO3166
+    country_of_destination="PK",   # ISO3166
+    description="LDPE LOTRENE MG70",
+    quantity=5000,
+    unit_of_measure="kg",
+    preferred_currency="USD"       # ISO4217 (optional)
+)
+
+print(result.unit_price)      # Price per unit
+print(result.currency)        # ISO4217 currency
+print(result.coo_research)    # True if sourced from origin country
+print(result.source_type)     # retail/wholesale/mixed
+print(result.confidence)      # 0.0-1.0
+```
+
+## Output Schema
+
+```json
+{
+  "unit_price": 1.60,
+  "currency": "USD",
+  "unit_of_measure": "kg",
+  "quantity_searched": 5000,
+  "quantity_unit": "kg",
+  "coo_research": true,
+  "source_type": "wholesale",
+  "currency_converted": true,
+  "currency_fallback": null,
+  "fx_rate": {"rate": 1.0, "from": "USD", "to": "USD", "timestamp_utc": "...", "source": "..."},
+  "sources": [...],
+  "confidence": 0.84,
+  "notes": "...",
+  "error": null
+}
+```
+
+## Quantity Thresholds
+
+| Type | Retail | Wholesale |
+|------|--------|-----------|
+| Weight (kg) | < 100 | ≥ 1000 |
+| Volume (litre) | < 100 | ≥ 1000 |
+| Count (pieces) | < 50 | ≥ 500 |
