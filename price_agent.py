@@ -141,7 +141,6 @@ OUTPUT JSON ONLY:
         unit_of_measure: str,
         preferred_currency: Optional[str] = None
     ) -> PricePrediction:
-        import pdb; pdb.set_trace()
         """Research price for goods."""
         # Validate country codes
         origin = country_of_origin.upper().strip()
