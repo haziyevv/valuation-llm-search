@@ -4,7 +4,8 @@ International trade price prediction with ISO compliance (ISO3166 countries, ISO
 
 ## Features
 
-- Web search for real-time market prices
+- Azure OpenAI integration for intelligent price analysis
+- Tavily Search API for real-time market prices (optimized for AI agents)
 - Country of origin research tracking (`coo_research` flag)
 - Wholesale/retail discrimination based on quantity
 - Currency conversion with USD fallback
@@ -18,12 +19,19 @@ pip install -r requirements.txt
 
 Create `.env`:
 ```env
-OPENAI_API_KEY=your_api_key
+# Azure OpenAI Configuration
+AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com/
+AZURE_OPENAI_API_KEY=your_azure_api_key
+AZURE_OPENAI_API_VERSION=2024-08-01-preview
+AZURE_OPENAI_DEPLOYMENT_NAME=gpt-4o
+
+# Tavily Search API (Get free key at https://tavily.com)
+TAVILY_API_KEY=tvly-xxxxxxxxxxxxx
 ```
 
 Run:
 ```bash
-streamlit run app.py
+streamlit run main.py
 ```
 
 ## API Usage

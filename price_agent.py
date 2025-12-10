@@ -1,6 +1,6 @@
 """
-Price Research Agent - Enhanced Version
-=========================================
+Price Research Agent - Enhanced Version (Azure OpenAI + Tavily Search)
+=======================================================================
 An intelligent agent for international trade price research with:
 - ISO3166 country codes
 - ISO4217 currency codes
@@ -8,19 +8,27 @@ An intelligent agent for international trade price research with:
 - Wholesale vs retail discrimination
 - Currency conversion with fallback
 - Confidence scoring
+- Tavily Search API integration (optimized for AI agents)
 """
 
-from openai import OpenAI
+from openai import AzureOpenAI
+from tavily import TavilyClient
 import json
 import os
-import re
 from typing import Optional, Literal
 from dataclasses import dataclass, asdict
 from dotenv import load_dotenv
 from utils import ISO3166_COUNTRIES, ISO4217_CURRENCIES, COUNTRY_TO_CURRENCY, UNIT_MAP, THRESHOLDS
 load_dotenv()
 
-MODEL_NAME = "gpt-5.1"
+# Azure OpenAI Configuration
+AZURE_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT")
+AZURE_API_KEY = os.getenv("AZURE_OPENAI_API_KEY")
+AZURE_API_VERSION = os.getenv("AZURE_OPENAI_API_VERSION", "2024-08-01-preview")
+AZURE_DEPLOYMENT_NAME = os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME", "gpt-4o")
+
+# Tavily Search Configuration
+TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 @dataclass
 class PricePrediction:
     """Price prediction response."""
@@ -80,33 +88,33 @@ def determine_source_type(quantity: float, unit: str) -> Literal["retail", "whol
 
 
 class PriceResearchAgent:
-    """Price research agent with web search capability."""
+    """Price research agent with web search capability using Azure OpenAI."""
     
     SYSTEM_PROMPT = """You are an expert international trade price analyst specializing in commodity valuation, customs declarations, and cross-border pricing research.
 
 ## YOUR MISSION
 Find accurate, verifiable unit prices for goods in international trade contexts.
 Your research directly impacts customs valuations and trade decisions, so accuracy and source quality are paramount.
-Use web search to have the most accurate and up to date information. Use your own knowledge and experience to make the best decision.
+Analyze the web search results provided to find the most accurate pricing information.
 
 RULES:
 ## SEARCH PROTOCOL (Strict "Waterfall" Logic)
-You must execute your research in the following strict order. Do not skip to Step 3 unless Steps 1 and 2 fail.
+Analyze the provided search results following this strict order:
 
 **STEP 1: Bilateral Trade (Country of Origin -> Country of Destination)**
-* Search for export prices specifically from the Country of Origin to the Country of Destination for the [Data Source Type].
-* *IF FOUND:* Use this data, mark `search_tier` as "1", and stop searching.
+* Look for export prices specifically from the Country of Origin to the Country of Destination for the [Data Source Type].
+* *IF FOUND:* Use this data, mark `search_tier` as "1".
 
 **STEP 2: Global Export (COO -> World)**
-* If Step 1 yields no verifiable data, search for the general export price of the product from the Country of Origin to *any* country for the [Data Source Type].
-* *IF FOUND:* Use this data, mark `search_tier` as "2", and stop searching.
+* If Step 1 yields no verifiable data, look for the general export price of the product from the Country of Origin to *any* country for the [Data Source Type].
+* *IF FOUND:* Use this data, mark `search_tier` as "2".
 
 **STEP 3: Global Market Price (Fallback)**
-* If Steps 1 and 2 yield no data, search for the global market price (commodity benchmarks, major international marketplaces) for the [Data Source Type].
+* If Steps 1 and 2 yield no data, use the global market price (commodity benchmarks, major international marketplaces) for the [Data Source Type].
 * *IF FOUND:* Use this data, mark `search_tier` as "3".
 
 2. Set coo_research=true in the response if you found any sources from the origin country to the destination country, false otherwise
-3. Data Source Type is the type of data source you are using to find the price. It can be retail, wholesale, mixed, or unknown.  For unknown source just use mixed.
+3. Data Source Type is the type of data source you are using to find the price. It can be retail, wholesale, mixed, or unknown. For unknown source just use mixed.
 4. Convert prices to target currency. If conversion fails, fallback to USD
 5. All currencies should be written in ISO4217, countries in ISO3166
 6. All prices should be in the Target currency
@@ -130,7 +138,45 @@ OUTPUT JSON ONLY:
 }"""
 
     def __init__(self):
-        self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        self.client = AzureOpenAI(
+            azure_endpoint=AZURE_ENDPOINT,
+            api_key=AZURE_API_KEY,
+            api_version=AZURE_API_VERSION
+        )
+        if TAVILY_API_KEY:
+            self.tavily = TavilyClient(api_key=TAVILY_API_KEY)
+        else:
+            self.tavily = None
+    
+    def _web_search(self, query: str, max_results: int = 10) -> list[dict]:
+        """Perform web search using Tavily API."""
+        if not self.tavily:
+            print("Warning: TAVILY_API_KEY not set")
+            return []
+        
+        try:
+            import pdb; pdb.set_trace()
+            response = self.tavily.search(
+                query=query,
+                max_results=max_results,
+                include_raw_content=True,
+                search_depth="advanced"
+            )
+            
+            results = []
+            for result in response.get("results", []):
+                results.append({
+                    "title": result.get("title", ""),
+                    "url": result.get("url", ""),
+                    "snippet": result.get("content", ""),
+                    "raw_content": result.get("raw_content", "")[:2000] if result.get("raw_content") else "",
+                    "score": result.get("score", 0)
+                })
+            return results
+            
+        except Exception as e:
+            print(f"Tavily Search error: {e}")
+            return []
     
     def research_price(
         self,
@@ -156,26 +202,64 @@ OUTPUT JSON ONLY:
         if target_currency not in ISO4217_CURRENCIES:
             return self._error("INVALID_INPUT", f"Invalid currency: {target_currency}", quantity, unit_of_measure)
         
-        # Build prompt
+        # Determine source type
         source_type = determine_source_type(quantity, unit_of_measure)
-        prompt = f"""Find price for:
+        origin_name = get_country_name(origin)
+        dest_name = get_country_name(dest)
+        
+        # Perform tiered web searches
+        search_results = []
+        
+        # Tier 1: Bilateral trade search
+        tier1_query = f"{description} price {origin_name} to {dest_name} {source_type} export"
+        tier1_results = self._web_search(tier1_query)
+        search_results.extend([{**r, "tier": 1} for r in tier1_results])
+        
+        # Tier 2: COO export search
+        tier2_query = f"{description} price {origin_name} export {source_type}"
+        tier2_results = self._web_search(tier2_query)
+        search_results.extend([{**r, "tier": 2} for r in tier2_results])
+        
+        # Tier 3: Global market search
+        tier3_query = f"{description} {source_type} price per {normalize_unit(unit_of_measure)} international market"
+        tier3_results = self._web_search(tier3_query)
+        search_results.extend([{**r, "tier": 3} for r in tier3_results])
+        
+        # Format search results for the prompt (include raw content when available)
+        search_context = "\n\n".join([
+            f"[Tier {r['tier']}] {r['title']}\nURL: {r['url']}\nSnippet: {r['snippet']}" + 
+            (f"\nPage Content: {r.get('raw_content', '')}" if r.get('raw_content') else "")
+            for r in search_results
+        ])
+        
+        # Build prompt with search results
+        prompt = f"""Analyze these web search results and find the price for:
 - Product: {description}
-- Country of Origin: {origin} ({get_country_name(origin)})
-- Country of Destination: {dest} ({get_country_name(dest)})
+- Country of Origin: {origin} ({origin_name})
+- Country of Destination: {dest} ({dest_name})
 - Data Source Type: {source_type.upper()}
 - Target currency: {target_currency}
+- Quantity: {quantity} {unit_of_measure}
 
-Search {get_country_name(origin)} sources first. Return price per {normalize_unit(unit_of_measure)} in {target_currency}."""
+Return price per {normalize_unit(unit_of_measure)} in {target_currency}.
+
+WEB SEARCH RESULTS:
+{search_context}
+
+Based on these search results, extract pricing information and return the JSON response."""
 
         try:
-            response = self.client.responses.create(
-                model=MODEL_NAME,
-                tools=[{"type": "web_search"}],
-                instructions=self.SYSTEM_PROMPT,
-                input=prompt,
+            response = self.client.chat.completions.create(
+                model=AZURE_DEPLOYMENT_NAME,
+                messages=[
+                    {"role": "system", "content": self.SYSTEM_PROMPT},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.1,
+                response_format={"type": "json_object"}
             )
             
-            result = json.loads(response.output_text)
+            result = json.loads(response.choices[0].message.content)
             return PricePrediction(
                 unit_price=result.get("unit_price"),
                 currency=result.get("currency", target_currency),
