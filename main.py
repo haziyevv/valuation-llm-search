@@ -15,7 +15,7 @@ st.caption("International trade price prediction with ISO compliance")
 
 # Build options
 countries = {f"{code} - {name}": code for code, name in sorted(ISO3166_COUNTRIES.items(), key=lambda x: x[1])}
-currencies = ["Auto (Destination)"] + ISO4217_CURRENCIES
+currencies = ISO4217_CURRENCIES
 units = ["kg", "tonne", "g", "lb", "litre", "ml", "piece", "unit", "set", "sqm", "m3"]
 
 # Input form
@@ -32,13 +32,28 @@ with st.form("price_form"):
     description = st.text_area("Goods Description", 
                                placeholder="e.g., LOW DENSITY POLYETHYLENE (LDPE) LOTRENE MG70")
     
-    col3, col4, col5 = st.columns(3)
+    col3, col4 = st.columns(2)
     with col3:
         quantity = st.number_input("Quantity", min_value=0.01, value=500.0, step=1.0)
     with col4:
         unit = st.selectbox("Unit", units)
+    
+    # Exchange rate and currency settings
+    col5, col6 = st.columns(2)
     with col5:
-        currency_sel = st.selectbox("Preferred Currency", currencies)
+        exchange_rate = st.number_input(
+            "Exchange Rate (USD → Target)", 
+            min_value=0.01, 
+            value=278.5,  # Default USD to PKR
+            step=0.1,
+            help="Exchange rate from USD to target currency. E.g., 278.5 means 1 USD = 278.5 PKR"
+        )
+    with col6:
+        target_currency = st.selectbox(
+            "Target Currency",
+            currencies,
+            index=currencies.index("PKR") if "PKR" in currencies else 0
+        )
     
     # Show expected source type
     source_type = determine_source_type(quantity, unit)
@@ -60,39 +75,52 @@ if submitted:
                     description=description,
                     quantity=quantity,
                     unit_of_measure=unit,
-                    preferred_currency=currency_sel if currency_sel != "Auto (Destination)" else None
+                    exchange_rate_usd=exchange_rate,
+                    target_currency=target_currency,
                 )
-                
                 if result.error:
                     st.error(f"**Error:** {result.error}\n\n{result.notes}")
                 else:
                     # Display results
                     st.success("Price research completed!")
                     
-                    # Main metrics
-                    col1, col2, col3 = st.columns(3)
-                    col1.metric("Unit Price", f"{result.currency} {result.unit_price:,.4f}" if result.unit_price else "N/A")
-                    col2.metric("Per", result.unit_of_measure)
-                    col3.metric("Confidence", f"{result.confidence:.0%}")
+                    # Main metrics - show both USD and converted price
+                    col1, col2, col3, col4 = st.columns(4)
+                    col1.metric(
+                        "Price (USD)", 
+                        f"${result.unit_price_usd:,.4f}" if result.unit_price_usd else "N/A"
+                    )
+                    col2.metric(
+                        f"Price ({target_currency})", 
+                        f"{result.unit_price:,.2f}" if result.unit_price else "N/A"
+                    )
+                    col3.metric("Per", result.unit_of_measure)
+                    col4.metric("Confidence", f"{result.confidence:.0%}")
                     
                     # Status indicators
-                    col4, col5, col6 = st.columns(3)
-                    col4.metric("COO Research", "✅ Yes" if result.coo_research else "⚠️ No")
-                    col5.metric("Source Type", result.source_type.upper())
-                    col6.metric("Currency Fallback", result.currency_fallback or "None")
+                    col5, col6, col7 = st.columns(3)
+                    col5.metric("COO Research", "✅ Yes" if result.coo_research else "⚠️ No")
+                    col6.metric("Source Type", result.source_type.upper())
+                    col7.metric("Converted", "✅ Yes" if result.currency_converted else "❌ No")
                     
                     # FX Rate
-                    if result.fx_rate and result.fx_rate.get("rate"):
+                    if result.fx_rate and result.fx_rate.rate:
                         fx = result.fx_rate
-                        st.caption(f"💱 FX: 1 {fx.get('from', 'N/A')} = {fx.get('rate', 'N/A')} {fx.get('to', 'N/A')}")
+                        st.caption(f"💱 FX: 1 {fx.from_currency or 'USD'} = {fx.rate or 'N/A'} {fx.to_currency or target_currency}")
+                    
+                    # Notes
+                    if result.notes:
+                        with st.expander("📝 Research Notes"):
+                            st.write(result.notes)
                     
                     # Sources
                     if result.sources:
                         with st.expander(f"📚 Sources ({len(result.sources)})"):
                             for src in result.sources:
-                                st.markdown(f"**{src.get('title', 'Unknown')}** ({src.get('country', 'N/A')} - {src.get('type', 'N/A')})")
-                                st.caption(f"Raw: {src.get('price_raw', 'N/A')} → {src.get('extracted_price', 'N/A')} {src.get('extracted_currency', '')} / {src.get('extracted_unit', '')}")
-                                st.markdown(f"[{src.get('url', '')[:50]}...]({src.get('url', '#')})")
+                                st.markdown(f"**{src.title or 'Unknown'}** ({src.country or 'N/A'} - {src.type or 'N/A'})")
+                                st.caption(f"Raw: {src.price_raw or 'N/A'} → {src.extracted_price or 'N/A'} {src.extracted_currency or ''} / {src.extracted_unit or ''}")
+                                url = src.url or '#'
+                                st.markdown(f"[{url[:50]}...]({url})")
                                 st.divider()
                     
                     # Full JSON

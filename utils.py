@@ -55,3 +55,45 @@ UNIT_MAP = {
 
 # Quantity thresholds
 THRESHOLDS = {"weight": (100, 1000), "volume": (100, 1000), "count": (50, 500)}
+
+
+
+from typing import Literal
+
+def normalize_unit(unit: str) -> str:
+    return UNIT_MAP.get(unit.lower().strip(), unit.lower().strip())
+
+
+def determine_source_type(quantity: float, unit: str) -> Literal["retail", "wholesale", "mixed"]:
+    """Determine retail/wholesale based on quantity."""
+    norm_unit = normalize_unit(unit)
+    
+    weight_units = ["kg", "g", "tonne", "lb"]
+    volume_units = ["litre", "ml", "m3"]
+    count_units = ["piece", "unit", "set"]
+    
+    if norm_unit in weight_units:
+        qty = quantity * 1000 if norm_unit == "tonne" else quantity / 1000 if norm_unit == "g" else quantity
+        retail_max, wholesale_min = THRESHOLDS["weight"]
+    elif norm_unit in volume_units:
+        qty = quantity * 1000 if norm_unit == "m3" else quantity / 1000 if norm_unit == "ml" else quantity
+        retail_max, wholesale_min = THRESHOLDS["volume"]
+    elif norm_unit in count_units:
+        qty = quantity
+        retail_max, wholesale_min = THRESHOLDS["count"]
+    else:
+        return "mixed"
+    
+    if qty < retail_max:
+        return "retail"
+    elif qty >= wholesale_min:
+        return "wholesale"
+    return "mixed"
+
+
+def get_country_name(code: str) -> str:
+    return ISO3166_COUNTRIES.get(code.upper(), code)
+
+
+def get_default_currency(country_code: str) -> str:
+    return COUNTRY_TO_CURRENCY.get(country_code.upper(), "USD")
