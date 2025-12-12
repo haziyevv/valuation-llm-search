@@ -99,20 +99,20 @@ You have access to a web_search tool. Use it strategically to find pricing infor
 ## SEARCH PROTOCOL (Strict "Waterfall" Logic)
 Follow this strict search order. Stop as soon as you find reliable data:
 
-**STEP 1: Bilateral Trade (Country of Origin -> Country of Destination)**
+**STEP 1 (search_tier=1): Bilateral Trade (Country of Origin -> Country of Destination)**
 Search for export prices specifically from the Country of Origin to the Country of Destination.
-Example query: "[product] price [origin country] to [destination country] export [wholesale/retail]"
+Example query: "[product] price [origin country] to [destination country] export [wholesale/retail] 2025"
 IF FOUND reliable data: Use this, set coo_research=true.
 
-**STEP 2: Global Export (COO -> World)**
+**STEP 2 (search_tier=2): Global Export (COO -> World)**
 If Step 1 yields no verifiable data, search for general export prices from the Country of Origin.
-Example query: "[product] price [origin country] export [wholesale/retail]"
-IF FOUND: Use this data.
+Example query: "[product] price [origin country] export [wholesale/retail] 2025"
+IF FOUND: Use this data, set coo_research=false.
 
-**STEP 3: Global Market Price (Fallback)**
+**STEP 3 (search_tier=3): Global Market Price (Fallback)**
 If Steps 1 and 2 yield no data, search for global market prices.
-Example query: "[product] [wholesale/retail] price per [unit] international market"
-IF FOUND: Use this data.
+Example query: "[product] [wholesale/retail] price per [unit] international market 2025"
+IF FOUND: Use this data, set coo_research=false.
 
 ## IMPORTANT RULES
 1. Set coo_research=true ONLY if you found sources from origin country to destination country
@@ -121,6 +121,50 @@ IF FOUND: Use this data.
 4. All countries in ISO3166 format
 5. Calculate confidence based on source quality and data consistency
 6. After gathering sufficient information, provide your final answer as a JSON object
+
+## SOURCES - COMPREHENSIVE DOCUMENTATION REQUIRED
+**CRITICAL: Include ALL sources that contributed to the final price in the "sources" array.**
+
+**RECENCY REQUIREMENT: Only use sources from the last 6 months.**
+- Prioritize the most recent data available
+- Discard sources older than 6 months from the current date
+- If only older sources are available, note this limitation in the notes and reduce confidence accordingly
+
+**PRICE DATA REQUIREMENT: Only include sources with actual price information.**
+- Every source MUST have an extracted_price value (not null)
+- Do NOT include sources that only provide general information without specific prices
+- Do NOT include sources where you could not extract a concrete numeric price
+
+This includes:
+- ✅ Primary pricing sources used to calculate the final price
+- ✅ Secondary/supporting sources that informed your analysis
+- ✅ Market benchmark sources used for cross-validation
+- ✅ Any customs, trade, or statistical database sources consulted
+
+For each source, provide:
+- "title": Descriptive title including product name, trade route, and date if available
+- "url": Full URL to the source
+- "country": ISO3166 code of the country the data pertains to
+- "type": One of "retail", "wholesale", "official", "market", "customs", "other"
+- "price_raw": Complete context - the exact figures, quantities, dates as found
+- "extracted_price": Numeric value you extracted (per unit) - REQUIRED, must not be null
+- "extracted_currency": ISO4217 currency code
+- "extracted_unit": Unit format like "USD/kg"
+
+## NOTES FIELD - DETAILED ANALYSIS REQUIRED
+The "notes" field must contain a comprehensive analytical explanation including:
+
+1. **Search Tier Used**: State which tier (1, 2, or 3) produced the data and why earlier tiers failed (if applicable)
+2. **Data Sources Analysis**: For each source, explain what data was extracted (quantities, values, dates)
+3. **Price Calculation**: Show your math - how you derived the unit price from raw data
+   - Example: "$50,940.82 for 24,750 kg = $2.06/kg"
+4. **Cross-Validation**: If multiple sources exist, compare their prices and explain consistency/discrepancies
+5. **Final Price Reasoning**: Explain how you arrived at the final unit_price (averaging, weighting, selection criteria)
+6. **Confidence Justification**: Explain why you assigned the confidence score
+7. **Caveats**: Note any limitations (e.g., "No direct AT→PK trade data found, using AT→other destinations as proxy")
+
+Example notes structure:
+"No direct customs or trade data was found for exports of [PRODUCT] from [ORIGIN] to [DESTINATION], so search_tier=3 and coo_research=false. Instead, [X] international customs records were used... The [ORIGIN]→[COUNTRY1] shipment shows $X for Y kg, giving Z USD/kg. The [ORIGIN]→[COUNTRY2] shipment shows... To estimate a reasonable valuation, I averaged: (A + B) / 2 ≈ C USD/kg. Source_type is 'mixed' because... This estimate should be treated as..."
 
 ## OUTPUT FORMAT
 After your research, provide the final answer as a JSON object with this structure:
@@ -132,20 +176,24 @@ After your research, provide the final answer as a JSON object with this structu
   "quantity_unit": "<original unit>",
   "coo_research": <boolean>,
   "source_type": "<retail|wholesale|mixed|unknown>",
-  "sources": [{"title": "<string>", "url": "<url>", "country": "<ISO3166>", "type": "<retail|wholesale|official|market|customs|other>", "price_raw": "<string>", "extracted_price": <number|null>, "extracted_currency": "<ISO4217|null>", "extracted_unit": "<string|null>"}],
+  "sources": [
+    // INCLUDE ALL SOURCES - pricing sources, FX sources, benchmark sources, etc.
+    {"title": "<descriptive title with product, route, date>", "url": "<url>", "country": "<ISO3166>", "type": "<retail|wholesale|official|market|customs|other>", "price_raw": "<full context: value, quantity, product, route, date>", "extracted_price": <number|null>, "extracted_currency": "<ISO4217|null>", "extracted_unit": "<string like 'USD/kg'>"}
+  ],
   "confidence": <0.0-1.0>,
-  "notes": "<string explaining your findings and reasoning>",
+  "notes": "<DETAILED analytical explanation as described above>",
   "error": <null|"INVALID_INPUT"|"NO_DATA">
 }"""
 
     def __init__(self):
         # Initialize Azure OpenAI LLM
+
         self.llm = AzureOpenAI(
             engine=AZURE_OPENAI_DEPLOYMENT_NAME,
             azure_endpoint=AZURE_OPENAI_ENDPOINT,
             api_key=AZURE_OPENAI_API_KEY,
             api_version=AZURE_OPENAI_API_VERSION,
-            temperature=0.1,
+            temperature=1.0
         )
         
         # Create search tool from the web_search function
