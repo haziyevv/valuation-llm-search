@@ -1,6 +1,6 @@
 """
-Price Cache - Semantic Vector Database
-=======================================
+Price Cache - Semantic Vector Database with Caching Service
+============================================================
 Uses Redis Stack to store and retrieve price predictions based on
 semantic similarity of product descriptions.
 
@@ -8,23 +8,28 @@ Features:
 - Stores predictions with embeddings of description + context
 - Finds similar past predictions to avoid redundant LLM calls
 - Configurable similarity threshold and cache expiry
+- CachedPriceService wraps the agent with automatic cache lookup/storage
 """
 
 import os
 import json
 import uuid
+import logging
 from datetime import datetime, timedelta
 from typing import Optional
 
 import redis
 from redis.commands.search.field import VectorField, TextField, NumericField
-from redis.commands.search.index import IndexDefinition, IndexType
+from redis.commands.search.index_definition import IndexDefinition, IndexType
 from redis.commands.search.query import Query
 import numpy as np
 from openai import OpenAI
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# Configure logging
+logger = logging.getLogger(__name__)
 
 # Configuration
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
@@ -260,8 +265,143 @@ class PriceCache:
         return count
 
 
-# Singleton instance
+class CachedPriceService:
+    """
+    Price research service with Redis vector caching.
+    
+    Wraps the PriceResearchAgent with automatic cache lookup/storage:
+    1. On request, search for similar items in Redis vector DB
+    2. If similarity >= THRESHOLD, return cached result
+    3. Otherwise, call the agent and cache the response
+    """
+    
+    def __init__(self, cache: Optional[PriceCache] = None, agent=None):
+        """
+        Initialize the cached price service.
+        
+        Args:
+            cache: PriceCache instance (optional, creates one if not provided)
+            agent: PriceResearchAgent instance (optional, creates one if not provided)
+        """
+        self.cache = cache or get_cache()
+        
+        # Lazy import to avoid circular dependency
+        if agent is None:
+            from price_agent import PriceResearchAgent
+            self.agent = PriceResearchAgent()
+        else:
+            self.agent = agent
+    
+    def get_price(
+        self,
+        description: str,
+        country_of_origin: str,
+        country_of_destination: str,
+        unit_of_measure: str,
+        quantity: float,
+        exchange_rate_usd: float,
+        target_currency: str = "PKR",
+    ) -> dict:
+        """
+        Get price prediction with caching.
+        
+        First checks Redis cache for similar items. If found with similarity
+        above threshold, returns cached result. Otherwise calls the agent
+        and caches the response.
+        
+        Args:
+            description: Product/goods description
+            country_of_origin: ISO3166 country code for origin
+            country_of_destination: ISO3166 country code for destination
+            unit_of_measure: Unit of measure (kg, tonne, etc.)
+            quantity: Quantity of goods
+            exchange_rate_usd: Exchange rate from USD to target currency
+            target_currency: Target currency code (default: PKR)
+            
+        Returns:
+            Dict containing the prediction and cache metadata:
+            {
+                "prediction": {...},  # The price prediction
+                "cache_hit": bool,    # Whether result came from cache
+                "similarity": float,  # Similarity score (if cache hit)
+                "cached_at": str,     # Timestamp (if cache hit)
+            }
+        """
+        # Step 1: Check cache for similar item
+        logger.info(f"Checking cache for: {description[:50]}...")
+        
+        cached_result = self.cache.search(
+            description=description,
+            country_of_origin=country_of_origin,
+            country_of_destination=country_of_destination,
+            unit_of_measure=unit_of_measure,
+        )
+        
+        if cached_result is not None:
+            # Cache hit! Return cached prediction
+            logger.info(
+                f"Cache HIT! Similarity: {cached_result['similarity']:.2%}, "
+                f"cached_at: {cached_result['cached_at']}"
+            )
+            return {
+                "prediction": cached_result["prediction"],
+                "cache_hit": True,
+                "similarity": cached_result["similarity"],
+                "cached_at": cached_result["cached_at"],
+                "original_description": cached_result.get("original_description"),
+            }
+        
+        # Step 2: Cache miss - call the agent
+        logger.info("Cache MISS - calling agent for price research...")
+        
+        agent_result = self.agent.research_price(
+            country_of_origin=country_of_origin,
+            country_of_destination=country_of_destination,
+            description=description,
+            quantity=quantity,
+            unit_of_measure=unit_of_measure,
+            exchange_rate_usd=exchange_rate_usd,
+            target_currency=target_currency,
+        )
+        
+        # Convert to dict for storage
+        prediction_dict = self.agent.to_dict(agent_result)
+        
+        # Step 3: Store in cache (only if we got a valid result)
+        if agent_result.error is None and agent_result.unit_price is not None:
+            doc_id = self.cache.store(
+                description=description,
+                country_of_origin=country_of_origin,
+                country_of_destination=country_of_destination,
+                unit_of_measure=unit_of_measure,
+                prediction=prediction_dict,
+            )
+            logger.info(f"Stored new prediction in cache with ID: {doc_id}")
+        else:
+            logger.warning(
+                f"Not caching result due to error or missing price: "
+                f"error={agent_result.error}, unit_price={agent_result.unit_price}"
+            )
+        
+        return {
+            "prediction": prediction_dict,
+            "cache_hit": False,
+            "similarity": None,
+            "cached_at": None,
+        }
+    
+    def get_stats(self) -> dict:
+        """Get cache statistics."""
+        return self.cache.get_stats()
+    
+    def clear_cache(self) -> int:
+        """Clear all cached entries."""
+        return self.cache.clear()
+
+
+# Singleton instances
 _cache_instance: Optional[PriceCache] = None
+_service_instance: Optional[CachedPriceService] = None
 
 
 def get_cache() -> PriceCache:
@@ -272,37 +412,95 @@ def get_cache() -> PriceCache:
     return _cache_instance
 
 
+def get_cached_price_service() -> CachedPriceService:
+    """Get or create the singleton cached price service instance."""
+    global _service_instance
+    if _service_instance is None:
+        _service_instance = CachedPriceService()
+    return _service_instance
+
+
 if __name__ == "__main__":
-    cache = PriceCache()
+    import sys
     
-    test_prediction = {
-        "unit_price": 1.25,
-        "currency": "USD",
-        "unit_of_measure": "kg",
-        "confidence": 0.85,
-        "notes": "Test prediction"
-    }
+    # Check command line args for test mode
+    if len(sys.argv) > 1 and sys.argv[1] == "--test-cache":
+        # Test cache directly without agent
+        cache = PriceCache()
+        
+        test_prediction = {
+            "unit_price": 1.25,
+            "currency": "USD",
+            "unit_of_measure": "kg",
+            "confidence": 0.85,
+            "notes": "Test prediction"
+        }
+        
+        doc_id = cache.store(
+            description="LOW DENSITY POLYETHYLENE (LDPE) LOTRENE MG70",
+            country_of_origin="QA",
+            country_of_destination="PK",
+            unit_of_measure="kg",
+            prediction=test_prediction
+        )
+        print(f"Stored prediction with ID: {doc_id}")
+        
+        result = cache.search(
+            description="LDPE Polyethylene Lotrene",
+            country_of_origin="QA",
+            country_of_destination="PK",
+            unit_of_measure="kg"
+        )
+        
+        if result:
+            print(f"Cache HIT! Similarity: {result['similarity']:.2%}")
+            print(f"Cached price: {result['prediction']['unit_price']} {result['prediction']['currency']}")
+        else:
+            print("Cache MISS - no similar entry found")
+        
+        print(f"\nCache stats: {cache.get_stats()}")
     
-    doc_id = cache.store(
-        description="LOW DENSITY POLYETHYLENE (LDPE) LOTRENE MG70",
-        country_of_origin="QA",
-        country_of_destination="PK",
-        unit_of_measure="kg",
-        prediction=test_prediction
-    )
-    print(f"Stored prediction with ID: {doc_id}")
-    
-    result = cache.search(
-        description="LDPE Polyethylene Lotrene",
-        country_of_origin="QA",
-        country_of_destination="PK",
-        unit_of_measure="kg"
-    )
-    
-    if result:
-        print(f"Cache HIT! Similarity: {result['similarity']:.2%}")
-        print(f"Cached price: {result['prediction']['unit_price']} {result['prediction']['currency']}")
     else:
-        print("Cache MISS - no similar entry found")
-    
-    print(f"\nCache stats: {cache.get_stats()}")
+        # Test the full cached service
+        print("=" * 60)
+        print("Testing CachedPriceService")
+        print("=" * 60)
+        
+        service = get_cached_price_service()
+        
+        # First call - should be a cache miss, will call agent
+        print("\n--- First call (expecting cache MISS) ---")
+        result1 = service.get_price(
+            description="LOW DENSITY POLYETHYLENE (LDPE) LOTRENE MG70",
+            country_of_origin="QA",
+            country_of_destination="PK",
+            unit_of_measure="kg",
+            quantity=5000,
+            exchange_rate_usd=278.5,
+            target_currency="PKR",
+        )
+        
+        print(f"Cache hit: {result1['cache_hit']}")
+        if result1['prediction'].get('unit_price'):
+            print(f"Price: {result1['prediction']['unit_price']:.2f} {result1['prediction'].get('currency', 'PKR')}")
+        
+        # Second call with similar description - should be a cache hit
+        print("\n--- Second call with similar description (expecting cache HIT) ---")
+        result2 = service.get_price(
+            description="LDPE Polyethylene Lotrene MG70 resin",
+            country_of_origin="QA",
+            country_of_destination="PK",
+            unit_of_measure="kg",
+            quantity=5000,
+            exchange_rate_usd=278.5,
+            target_currency="PKR",
+        )
+        
+        print(f"Cache hit: {result2['cache_hit']}")
+        if result2['cache_hit']:
+            print(f"Similarity: {result2['similarity']:.2%}")
+            print(f"Cached at: {result2['cached_at']}")
+        if result2['prediction'].get('unit_price'):
+            print(f"Price: {result2['prediction']['unit_price']:.2f} {result2['prediction'].get('currency', 'PKR')}")
+        
+        print(f"\nCache stats: {service.get_stats()}")
