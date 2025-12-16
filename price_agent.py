@@ -1,6 +1,6 @@
 """
-Price Research Agent - LlamaIndex Version (Azure OpenAI + Tavily Search)
-=========================================================================
+Price Research Agent - LlamaIndex Version (Azure OpenAI + Web Search Plus)
+===========================================================================
 An intelligent agent for international trade price research using LlamaIndex.
 The agent autonomously decides when and how to search for pricing information.
 
@@ -11,7 +11,7 @@ Features:
 - Wholesale vs retail discrimination
 - Currency conversion with fallback
 - Confidence scoring
-- Tavily Search API integration via LlamaIndex agent
+- Web Search Plus API integration via LlamaIndex agent
 """
 
 import json
@@ -28,7 +28,6 @@ from config import (
     AZURE_OPENAI_API_KEY,
     AZURE_OPENAI_API_VERSION,
     AZURE_OPENAI_DEPLOYMENT_NAME,
-    TAVILY_API_KEY,
 )
 from search import web_search
 from utils import (

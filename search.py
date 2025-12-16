@@ -1,14 +1,11 @@
-import os
-from tavily import TavilyClient
+import requests
 
-from config import TAVILY_API_KEY
+from config import WEBSEARCH_PLUS_API_KEY
 
-
-tavily = TavilyClient(api_key=TAVILY_API_KEY)
 
 def web_search(query: str) -> str:
     """
-    Search the web for information using Tavily API.
+    Search the web for information using Web Search Plus API.
     
     Args:
         query: The search query string
@@ -17,33 +14,53 @@ def web_search(query: str) -> str:
         A formatted string containing search results with titles, URLs, and content snippets
     """
     try:
-        response = tavily.search(
-            query=query,
-            max_results=10,
-            include_raw_content=True,
-            search_depth="advanced"
-        )
+        url = "https://api.websearch.plus/v1/web_search_plus"
         
-        results = []
-        for result in response.get("results", []):
-            title = result.get("title", "")
-            url = result.get("url", "")
-            snippet = result.get("content", "")
-            raw_content = result.get("raw_content", "")
-            
-            # Truncate raw content if too long
-            if raw_content and len(raw_content) > 2000:
-                raw_content = raw_content[:2000] + "..."
-            
-            result_text = f"Title: {title}\nURL: {url}\nSnippet: {snippet}"
-            if raw_content:
-                result_text += f"\nPage Content: {raw_content}"
-            results.append(result_text)
+        headers = {
+            "Authorization": f"Bearer {WEBSEARCH_PLUS_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        
+        payload = {
+            "query": query,
+            "search_context_size": "high",
+            "language": "en",
+            "mode": "smart",
+            "type": "search",
+            "qdr": "m"
+        }
+        
+        response = requests.post(url, headers=headers, json=payload, timeout=60)
+        response.raise_for_status()
+        data = response.json()
+        
+        # Check for errors in response
+        if "error" in data:
+            return f"Search error: {data['error']}"
+        
+        # Web Search Plus returns results as a pre-formatted string
+        results = data.get("results", "")
         
         if not results:
             return "No search results found for this query."
         
-        return "\n\n---\n\n".join(results)
+        # Results is already a formatted string from the API
+        if isinstance(results, str):
+            return results
         
+        # Fallback: if results is a list, format it
+        if isinstance(results, list):
+            formatted = []
+            for result in results:
+                title = result.get("title", "")
+                result_url = result.get("url", "")
+                content = result.get("content", "")
+                formatted.append(f"Title: {title}\nURL: {result_url}\nContent: {content}")
+            return "\n\n---\n\n".join(formatted) if formatted else "No search results found."
+        
+        return str(results)
+        
+    except requests.exceptions.RequestException as e:
+        return f"Search error: {str(e)}"
     except Exception as e:
         return f"Search error: {str(e)}"
