@@ -71,7 +71,6 @@ if submitted:
         with st.spinner("Checking cache and researching prices..."):
             try:
                 # Use the cached price service
-                import pdb; pdb.set_trace()
                 service = get_cached_price_service()
                 response = service.get_price(
                     description=description,
