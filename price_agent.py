@@ -98,23 +98,18 @@ You have access to a web_search tool. Use it strategically to find pricing infor
 ## SEARCH PROTOCOL (Strict "Waterfall" Logic)
 Follow this strict search order. Stop as soon as you find reliable data:
 
-**STEP 1 (search_tier=1): Bilateral Trade (Country of Origin -> Country of Destination)**
-Search for export prices specifically from the Country of Origin to the Country of Destination.
-Example query: "[product] price [origin country] to [destination country] export [wholesale/retail] 2025"
+**STEP 1 (search_tier=1): Global Export from Country of Origin**
+Search for export prices from the Country of Origin to any destination.
+Example query: "[product] price [origin country] export [wholesale/retail] 2025"
 IF FOUND reliable data: Use this, set coo_research=true.
 
-**STEP 2 (search_tier=2): Global Export (COO -> World)**
-If Step 1 yields no verifiable data, search for general export prices from the Country of Origin.
-Example query: "[product] price [origin country] export [wholesale/retail] 2025"
-IF FOUND: Use this data, set coo_research=false.
-
-**STEP 3 (search_tier=3): Global Market Price (Fallback)**
-If Steps 1 and 2 yield no data, search for global market prices.
+**STEP 2 (search_tier=2): Global Market Price (Fallback)**
+If Step 1 yields no verifiable data, search for global market prices.
 Example query: "[product] [wholesale/retail] price per [unit] international market 2025"
 IF FOUND: Use this data, set coo_research=false.
 
 ## IMPORTANT RULES
-1. Set coo_research=true ONLY if you found sources from origin country to destination country
+1. Set coo_research=true ONLY if you found sources from the origin country
 2. Data Source Type (retail/wholesale/mixed) is provided - search accordingly
 3. **ALWAYS return unit_price in USD** - convert any found prices to USD if needed
 4. All countries in ISO3166 format
@@ -153,17 +148,15 @@ For each source, provide:
 ## NOTES FIELD - DETAILED ANALYSIS REQUIRED
 The "notes" field must contain a comprehensive analytical explanation including:
 
-1. **Search Tier Used**: State which tier (1, 2, or 3) produced the data and why earlier tiers failed (if applicable)
+1. **Search Tier Used**: State which tier (1 or 2) produced the data and why earlier tier failed (if applicable)
 2. **Data Sources Analysis**: For each source, explain what data was extracted (quantities, values, dates)
 3. **Price Calculation**: Show your math - how you derived the unit price from raw data
    - Example: "$50,940.82 for 24,750 kg = $2.06/kg"
 4. **Cross-Validation**: If multiple sources exist, compare their prices and explain consistency/discrepancies
 5. **Final Price Reasoning**: Explain how you arrived at the final unit_price (averaging, weighting, selection criteria)
-6. **Confidence Justification**: Explain why you assigned the confidence score
-7. **Caveats**: Note any limitations (e.g., "No direct AT→PK trade data found, using AT→other destinations as proxy")
 
 Example notes structure:
-"No direct customs or trade data was found for exports of [PRODUCT] from [ORIGIN] to [DESTINATION], so search_tier=3 and coo_research=false. Instead, [X] international customs records were used... The [ORIGIN]→[COUNTRY1] shipment shows $X for Y kg, giving Z USD/kg. The [ORIGIN]→[COUNTRY2] shipment shows... To estimate a reasonable valuation, I averaged: (A + B) / 2 ≈ C USD/kg. Source_type is 'mixed' because... This estimate should be treated as..."
+"No direct customs or trade data was found for exports of [PRODUCT] from [ORIGIN], so search_tier=2 and coo_research=false. Instead, [X] international customs records were used... The [ORIGIN]→[COUNTRY1] shipment shows $X for Y kg, giving Z USD/kg. The [ORIGIN]→[COUNTRY2] shipment shows... To estimate a reasonable valuation, I averaged: (A + B) / 2 ≈ C USD/kg. Source_type is 'mixed' because... This estimate should be treated as..."
 
 ## OUTPUT FORMAT
 After your research, provide the final answer as a JSON object with this structure:
