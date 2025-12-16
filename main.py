@@ -1,12 +1,14 @@
-"""Price Research Agent - Streamlit UI"""
+"""Price Research Agent - Streamlit UI with Redis Caching"""
 
 import streamlit as st
 from price_agent import (
     PriceResearchAgent, 
     ISO3166_COUNTRIES, 
     ISO4217_CURRENCIES,
-    determine_source_type
+    determine_source_type,
+    PricePrediction,
 )
+from price_cache import get_cached_price_service, SIMILARITY_THRESHOLD
 
 st.set_page_config(page_title="Price Research Agent", page_icon="💰", layout="centered")
 
@@ -66,66 +68,103 @@ if submitted:
     if not description:
         st.warning("Please provide a goods description.")
     else:
-        with st.spinner("Researching prices..."):
+        with st.spinner("Checking cache and researching prices..."):
             try:
-                agent = PriceResearchAgent()
-                result = agent.research_price(
+                # Use the cached price service
+                import pdb; pdb.set_trace()
+                service = get_cached_price_service()
+                response = service.get_price(
+                    description=description,
                     country_of_origin=countries[origin],
                     country_of_destination=countries[destination],
-                    description=description,
-                    quantity=quantity,
                     unit_of_measure=unit,
+                    quantity=quantity,
                     exchange_rate_usd=exchange_rate,
                     target_currency=target_currency,
                 )
-                if result.error:
-                    st.error(f"**Error:** {result.error}\n\n{result.notes}")
+                
+                # Extract prediction from response
+                prediction = response["prediction"]
+                cache_hit = response["cache_hit"]
+                similarity = response.get("similarity")
+                cached_at = response.get("cached_at")
+                
+                # Check for errors
+                if prediction.get("error"):
+                    st.error(f"**Error:** {prediction['error']}\n\n{prediction.get('notes', '')}")
                 else:
-                    # Display results
-                    st.success("Price research completed!")
+                    # Display cache status
+                    if cache_hit:
+                        st.success(f"⚡ Cache HIT! Similarity: {similarity:.1%} (threshold: {SIMILARITY_THRESHOLD:.0%})")
+                        st.caption(f"📦 Cached at: {cached_at}")
+                    else:
+                        st.info("🔍 Cache MISS - Fresh research completed and cached")
                     
                     # Main metrics - show both USD and converted price
                     col1, col2, col3, col4 = st.columns(4)
+                    unit_price_usd = prediction.get("unit_price_usd")
+                    unit_price = prediction.get("unit_price")
+                    confidence = prediction.get("confidence", 0)
+                    
                     col1.metric(
                         "Price (USD)", 
-                        f"${result.unit_price_usd:,.4f}" if result.unit_price_usd else "N/A"
+                        f"${unit_price_usd:,.4f}" if unit_price_usd else "N/A"
                     )
                     col2.metric(
                         f"Price ({target_currency})", 
-                        f"{result.unit_price:,.2f}" if result.unit_price else "N/A"
+                        f"{unit_price:,.2f}" if unit_price else "N/A"
                     )
-                    col3.metric("Per", result.unit_of_measure)
-                    col4.metric("Confidence", f"{result.confidence:.0%}")
+                    col3.metric("Per", prediction.get("unit_of_measure", unit))
+                    col4.metric("Confidence", f"{confidence:.0%}")
                     
                     # Status indicators
                     col5, col6, col7 = st.columns(3)
-                    col5.metric("COO Research", "✅ Yes" if result.coo_research else "⚠️ No")
-                    col6.metric("Source Type", result.source_type.upper())
-                    col7.metric("Converted", "✅ Yes" if result.currency_converted else "❌ No")
+                    col5.metric("COO Research", "✅ Yes" if prediction.get("coo_research") else "⚠️ No")
+                    col6.metric("Source Type", prediction.get("source_type", "unknown").upper())
+                    col7.metric("Converted", "✅ Yes" if prediction.get("currency_converted") else "❌ No")
                     
                     # FX Rate
-                    if result.fx_rate and result.fx_rate.rate:
-                        fx = result.fx_rate
-                        st.caption(f"💱 FX: 1 {fx.from_currency or 'USD'} = {fx.rate or 'N/A'} {fx.to_currency or target_currency}")
+                    fx_rate = prediction.get("fx_rate")
+                    if fx_rate and fx_rate.get("rate"):
+                        st.caption(f"💱 FX: 1 {fx_rate.get('from', 'USD')} = {fx_rate.get('rate', 'N/A')} {fx_rate.get('to', target_currency)}")
                     
                     # Notes
-                    if result.notes:
+                    notes = prediction.get("notes")
+                    if notes:
                         with st.expander("📝 Research Notes"):
-                            st.write(result.notes)
+                            st.write(notes)
                     
                     # Sources
-                    if result.sources:
-                        with st.expander(f"📚 Sources ({len(result.sources)})"):
-                            for src in result.sources:
-                                st.markdown(f"**{src.title or 'Unknown'}** ({src.country or 'N/A'} - {src.type or 'N/A'})")
-                                st.caption(f"Raw: {src.price_raw or 'N/A'} → {src.extracted_price or 'N/A'} {src.extracted_currency or ''} / {src.extracted_unit or ''}")
-                                url = src.url or '#'
+                    sources = prediction.get("sources", [])
+                    if sources:
+                        with st.expander(f"📚 Sources ({len(sources)})"):
+                            for src in sources:
+                                st.markdown(f"**{src.get('title', 'Unknown')}** ({src.get('country', 'N/A')} - {src.get('type', 'N/A')})")
+                                st.caption(f"Raw: {src.get('price_raw', 'N/A')} → {src.get('extracted_price', 'N/A')} {src.get('extracted_currency', '')} / {src.get('extracted_unit', '')}")
+                                url = src.get('url', '#')
                                 st.markdown(f"[{url[:50]}...]({url})")
                                 st.divider()
                     
-                    # Full JSON
+                    # Full JSON (including cache metadata)
                     with st.expander("📋 Full JSON Response"):
-                        st.json(agent.to_dict(result))
+                        st.json(response)
                         
             except Exception as e:
                 st.error(f"Research failed: {str(e)}")
+
+# Sidebar: Cache Stats
+with st.sidebar:
+    st.subheader("📊 Cache Statistics")
+    try:
+        service = get_cached_price_service()
+        stats = service.get_stats()
+        st.metric("Cached Entries", stats["total_entries"])
+        st.metric("Similarity Threshold", f"{stats['similarity_threshold']:.0%}")
+        st.metric("Expiry (days)", stats["expiry_days"])
+        
+        if st.button("🗑️ Clear Cache"):
+            cleared = service.clear_cache()
+            st.success(f"Cleared {cleared} entries")
+            st.rerun()
+    except Exception as e:
+        st.warning(f"Cache unavailable: {str(e)}")
