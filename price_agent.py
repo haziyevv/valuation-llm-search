@@ -30,7 +30,7 @@ class PricePrediction:
     quantity_searched: float
     quantity_unit: str
     coo_research: bool
-    source_type: Literal["retail", "wholesale", "mixed", "unknown"]
+    source_type: Literal["retail", "wholesale"]
     currency_converted: bool
     currency_fallback: Optional[str]
     fx_rate: Optional[dict]
@@ -52,7 +52,7 @@ def get_default_currency(country_code: str) -> str:
     return COUNTRY_TO_CURRENCY.get(country_code.upper(), "USD")
 
 
-def determine_source_type(quantity: float, unit: str) -> Literal["retail", "wholesale", "mixed"]:
+def determine_source_type(quantity: float, unit: str) -> Literal["retail", "wholesale"]:
     """Determine retail/wholesale based on quantity."""
     norm_unit = normalize_unit(unit)
     
@@ -70,13 +70,11 @@ def determine_source_type(quantity: float, unit: str) -> Literal["retail", "whol
         qty = quantity
         retail_max, wholesale_min = THRESHOLDS["count"]
     else:
-        return "mixed"
+        return "wholesale"
     
     if qty < retail_max:
         return "retail"
-    elif qty >= wholesale_min:
-        return "wholesale"
-    return "mixed"
+    return "wholesale"
 
 
 class PriceResearchAgent:
@@ -104,7 +102,7 @@ IF FOUND: Use this data, set coo_research=false.
 
 
 2. Set coo_research=true in the response if you found any sources from the origin country, false otherwise
-3. Data Source Type is the type of data source you are using to find the price. It can be retail, wholesale, mixed, or unknown.  For unknown source just use mixed.
+3. Data Source Type is the type of data source you are using to find the price. It can be retail or wholesale.
 4. Convert prices to target currency. If conversion fails, fallback to USD
 5. All currencies should be written in ISO4217, countries in ISO3166
 6. All prices should be in the Target currency
@@ -117,7 +115,6 @@ OUTPUT JSON ONLY:
   "quantity_searched": <number>,
   "quantity_unit": "<original unit>",
   "coo_research": <boolean>,
-  "source_type": "<retail|wholesale|mixed|unknown>",
   "currency_converted": <boolean>,
   "currency_fallback": "<ISO4217|null>",
   "fx_rate": {"rate": <number|null>, "from": "<ISO4217>", "to": "<ISO4217>", "timestamp_utc": "<ISO8601|null>", "source": "<string|null>"},
@@ -181,7 +178,7 @@ Search {get_country_name(origin)} sources first. Return price per {normalize_uni
                 quantity_searched=result.get("quantity_searched", quantity),
                 quantity_unit=result.get("quantity_unit", unit_of_measure),
                 coo_research=result.get("coo_research", False),
-                source_type=result.get("source_type", "unknown"),
+                source_type=source_type,  # Use pre-determined source_type from input
                 currency_converted=result.get("currency_converted", False),
                 currency_fallback=result.get("currency_fallback"),
                 fx_rate=result.get("fx_rate"),
@@ -199,7 +196,7 @@ Search {get_country_name(origin)} sources first. Return price per {normalize_uni
         return PricePrediction(
             unit_price=None, currency="USD", unit_of_measure=normalize_unit(unit),
             quantity_searched=qty, quantity_unit=unit, coo_research=False,
-            source_type="unknown", currency_converted=False, currency_fallback=None,
+            source_type="wholesale", currency_converted=False, currency_fallback=None,
             fx_rate=None, sources=[], confidence=0.0, notes=msg, error=code
         )
     
