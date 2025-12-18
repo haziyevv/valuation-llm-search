@@ -26,7 +26,6 @@ def web_search(query: str) -> str:
             "gl": "us",
             "num": 10
         }
-        import pdb; pdb.set_trace()
         response = requests.post(SERPER_API_URL, headers=headers, json=payload, timeout=60)
         response.raise_for_status()
         data = response.json()
