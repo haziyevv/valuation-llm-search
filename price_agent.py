@@ -100,12 +100,21 @@ If Step 1 yields no verifiable data, search for global market prices.
 Example query: "[product] [wholesale/retail] price per [unit] international market 2025"
 IF FOUND: Use this data, set coo_research=false.
 
+## IMPORTANT RULES
+1. Set coo_research=true in the response if you found any sources from the origin country, false otherwise
+2. Data Source Type is the type of data source you are using to find the price. It can be retail or wholesale.
+3. Convert prices to target currency. If conversion fails, fallback to USD
+4. All currencies should be written in ISO4217, countries in ISO3166
+5. All prices should be in the Target currency
 
-2. Set coo_research=true in the response if you found any sources from the origin country, false otherwise
-3. Data Source Type is the type of data source you are using to find the price. It can be retail or wholesale.
-4. Convert prices to target currency. If conversion fails, fallback to USD
-5. All currencies should be written in ISO4217, countries in ISO3166
-6. All prices should be in the Target currency
+
+**RECENCY REQUIREMENT: Only use sources from the last 6 months.**
+- Prioritize the most recent data available
+- Discard sources older than 6 months from the current date
+- If only older sources are available, note this limitation in the notes and reduce confidence accordingly
+- Do not inclue pricing sources used to convert the price to the target currency
+
+
 
 OUTPUT JSON ONLY:
 {
