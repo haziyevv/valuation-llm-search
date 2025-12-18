@@ -57,7 +57,7 @@ class SourceInfo(BaseModel):
     title: str = ""
     url: str = ""
     country: str = ""
-    type: Literal["retail", "wholesale", "official", "market", "customs", "other"] = "other"
+    type: Literal["retail", "wholesale"] = "wholesale"
     price_raw: str = ""
     extracted_price: Optional[float] = None
     extracted_currency: Optional[str] = None
@@ -145,7 +145,7 @@ For each source, provide:
 - "title": Descriptive title including product name, trade route, and date if available
 - "url": Full URL to the source
 - "country": ISO3166 code of the country the data pertains to
-- "type": One of "retail", "wholesale", "official", "market", "customs", "other"
+- "type": One of "retail", "wholesale"
 - "price_raw": Complete context - the exact figures, quantities, dates as found
 - "extracted_price": Numeric value you extracted (per unit) - REQUIRED, must not be null
 - "extracted_currency": ISO4217 currency code
@@ -175,10 +175,9 @@ After your research, provide the final answer as a JSON object with this structu
   "quantity_searched": <number>,
   "quantity_unit": "<original unit>",
   "coo_research": <boolean>,
-  "source_type": "<retail|wholesale|mixed|unknown>",
   "sources": [
     // INCLUDE ALL SOURCES - pricing sources, FX sources, benchmark sources, etc.
-    {"title": "<descriptive title with product, route, date>", "url": "<url>", "country": "<ISO3166>", "type": "<retail|wholesale|official|market|customs|other>", "price_raw": "<full context: value, quantity, product, route, date>", "extracted_price": <number|null>, "extracted_currency": "<ISO4217|null>", "extracted_unit": "<string like 'USD/kg'>"}
+    {"title": "<descriptive title with product, route, date>", "url": "<url>", "country": "<ISO3166>", "type": "<retail|wholesale>", "price_raw": "<full context: value, quantity, product, route, date>", "extracted_price": <number|null>, "extracted_currency": "<ISO4217|null>", "extracted_unit": "<string like 'USD/kg'>"}
   ],
   "confidence": <0.0-1.0>,
   "notes": "<DETAILED analytical explanation as described above>",
@@ -313,7 +312,7 @@ After gathering information, provide your final answer as a JSON object with uni
                     quantity_searched=result.get("quantity_searched", quantity),
                     quantity_unit=result.get("quantity_unit", unit_of_measure),
                     coo_research=result.get("coo_research", False),
-                    source_type=result.get("source_type", "unknown"),
+                    source_type=source_type,  # Use pre-determined source_type from input
                     currency_converted=currency_converted,
                     currency_fallback=None,
                     fx_rate=fx_rate,
