@@ -250,17 +250,29 @@ class PriceCache:
         }
     
     def clear(self) -> int:
-        """Clear all entries from the cache. Returns count of deleted entries."""
+        """Clear all entries from this index only. Returns count of deleted entries."""
         count = 0
-        cursor = 0
         
-        while True:
-            cursor, keys = self.client.scan(cursor, match=f"{self.KEY_PREFIX}*", count=100)
-            if keys:
-                count += len(keys)
-                self.client.delete(*keys)
-            if cursor == 0:
-                break
+        try:
+            batch_size = 100
+            
+            while True:
+                # Always query from offset 0 since we're deleting as we go
+                query = Query("*").paging(0, batch_size)
+                results = self.client.ft(self.INDEX_NAME).search(query)
+                
+                if not results.docs:
+                    break
+                
+                # Delete only documents belonging to this index
+                doc_ids = [doc.id for doc in results.docs]
+                if doc_ids:
+                    self.client.delete(*doc_ids)
+                    count += len(doc_ids)
+                    
+        except redis.ResponseError:
+            # Index doesn't exist, nothing to clear
+            pass
         
         return count
 
