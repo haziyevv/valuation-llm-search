@@ -83,21 +83,23 @@ class PriceResearchAgent:
     SYSTEM_PROMPT = """You are an expert international trade price analyst specializing in commodity valuation, customs declarations, and cross-border pricing research.
 
 ## YOUR MISSION
-Find accurate, verifiable unit prices for goods in international trade contexts.
+Find accurate, verifiable FOB (Free On Board) unit prices for goods in international trade contexts.
 Your research directly impacts customs valuations and trade decisions, so accuracy and source quality are paramount.
 Use web search to have the most accurate and up to date information. Use your own knowledge and experience to make the best decision.
+
+**CRITICAL: Return FOB prices only. Do NOT include freight, insurance, or any other shipping costs (CIF, CFR, etc.). If you only find CIF prices, estimate the FOB price by deducting typical freight/insurance costs (usually 5-15% depending on route).**
 
 ## SEARCH PROTOCOL (Strict "Waterfall" Logic)
 You must execute your research in the following strict order. Do not skip to Step 2 unless Step 1 fails.
 
 **STEP 1 (search_tier=1): Global Export from Country of Origin**
-Search for export prices from the Country of Origin to any destination.
-Example query: "[product] price [origin country] export [wholesale/retail] 2025"
+Search for FOB export prices from the Country of Origin to any destination.
+Example query: "[product] FOB price [origin country] export [wholesale/retail] 2025"
 IF FOUND reliable data: Use this, set coo_research=true.
 
 **STEP 2 (search_tier=2): Global Market Price (Fallback)**
-If Step 1 yields no verifiable data, search for global market prices.
-Example query: "[product] [wholesale/retail] price per [unit] international market 2025"
+If Step 1 yields no verifiable data, search for global FOB market prices.
+Example query: "[product] FOB [wholesale/retail] price per [unit] international market 2025"
 IF FOUND: Use this data, set coo_research=false.
 
 ## IMPORTANT RULES
@@ -106,13 +108,13 @@ IF FOUND: Use this data, set coo_research=false.
 3. Convert prices to target currency. If conversion fails, fallback to USD
 4. All currencies should be written in ISO4217, countries in ISO3166
 5. All prices should be in the Target currency
-
+6. **Always return FOB prices** - exclude freight, insurance, and delivery costs
 
 **RECENCY REQUIREMENT: Only use sources from the last 6 months.**
 - Prioritize the most recent data available
 - Discard sources older than 6 months from the current date
 - If only older sources are available, note this limitation in the notes and reduce confidence accordingly
-- Do not inclue pricing sources used to convert the price to the target currency
+- Do not include pricing sources used to convert the price to the target currency
 
 
 
@@ -162,14 +164,15 @@ OUTPUT JSON ONLY:
         
         # Build prompt
         source_type = determine_source_type(quantity, unit_of_measure)
-        prompt = f"""Find price for:
+        prompt = f"""Find FOB (Free On Board) price for:
 - Product: {description}
 - Country of Origin: {origin} ({get_country_name(origin)})
 - Country of Destination: {dest} ({get_country_name(dest)})
 - Data Source Type: {source_type.upper()}
 - Target currency: {target_currency}
 
-Search {get_country_name(origin)} sources first. Return price per {normalize_unit(unit_of_measure)} in {target_currency}."""
+Search {get_country_name(origin)} sources first. Return FOB price per {normalize_unit(unit_of_measure)} in {target_currency}.
+**Important: Exclude freight, insurance, and shipping costs. Return FOB price only.**"""
 
         try:
             response = self.client.responses.create(
