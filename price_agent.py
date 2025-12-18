@@ -110,7 +110,7 @@ IF FOUND: Use this data, set coo_research=false.
 
 ## IMPORTANT RULES
 1. Set coo_research=true ONLY if you found sources from the origin country
-2. Data Source Type (retail/wholesale/mixed) is provided - search accordingly
+2. Data Source Type (retail/wholesale) is provided - search accordingly
 3. **ALWAYS return unit_price in USD** - convert any found prices to USD if needed
 4. All countries in ISO3166 format
 5. Calculate confidence based on source quality and data consistency
@@ -156,7 +156,7 @@ The "notes" field must contain a comprehensive analytical explanation including:
 5. **Final Price Reasoning**: Explain how you arrived at the final unit_price (averaging, weighting, selection criteria)
 
 Example notes structure:
-"No direct customs or trade data was found for exports of [PRODUCT] from [ORIGIN], so search_tier=2 and coo_research=false. Instead, [X] international customs records were used... The [ORIGIN]→[COUNTRY1] shipment shows $X for Y kg, giving Z USD/kg. The [ORIGIN]→[COUNTRY2] shipment shows... To estimate a reasonable valuation, I averaged: (A + B) / 2 ≈ C USD/kg. Source_type is 'mixed' because... This estimate should be treated as..."
+"No direct customs or trade data was found for exports of [PRODUCT] from [ORIGIN], so search_tier=2 and coo_research=false. Instead, [X] international customs records were used... The [ORIGIN]→[COUNTRY1] shipment shows $X for Y kg, giving Z USD/kg. The [ORIGIN]→[COUNTRY2] shipment shows... To estimate a reasonable valuation, I averaged: (A + B) / 2 ≈ C USD/kg."
 
 ## OUTPUT FORMAT
 After your research, provide the final answer as a JSON object with this structure:
@@ -167,7 +167,6 @@ After your research, provide the final answer as a JSON object with this structu
   "quantity_searched": <number>,
   "quantity_unit": "<original unit>",
   "coo_research": <boolean>,
-  "source_type": "<retail|wholesale|mixed|unknown>",
   "sources": [
     // INCLUDE ALL SOURCES - pricing sources, FX sources, benchmark sources, etc.
     {"title": "<descriptive title with product, route, date>", "url": "<url>", "country": "<ISO3166>", "type": "<retail|wholesale|official|market|customs|other>", "price_raw": "<full context: value, quantity, product, route, date>", "extracted_price": <number|null>, "extracted_currency": "<ISO4217|null>", "extracted_unit": "<string like 'USD/kg'>"}
@@ -305,7 +304,7 @@ After gathering information, provide your final answer as a JSON object with uni
                     quantity_searched=result.get("quantity_searched", quantity),
                     quantity_unit=result.get("quantity_unit", unit_of_measure),
                     coo_research=result.get("coo_research", False),
-                    source_type=result.get("source_type", "unknown"),
+                    source_type=source_type,  # Use pre-determined source_type from input
                     currency_converted=currency_converted,
                     currency_fallback=None,
                     fx_rate=fx_rate,
