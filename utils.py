@@ -64,7 +64,7 @@ def normalize_unit(unit: str) -> str:
     return UNIT_MAP.get(unit.lower().strip(), unit.lower().strip())
 
 
-def determine_source_type(quantity: float, unit: str) -> Literal["retail", "wholesale", "mixed"]:
+def determine_source_type(quantity: float, unit: str) -> Literal["retail", "wholesale"]:
     """Determine retail/wholesale based on quantity."""
     norm_unit = normalize_unit(unit)
     
@@ -82,13 +82,11 @@ def determine_source_type(quantity: float, unit: str) -> Literal["retail", "whol
         qty = quantity
         retail_max, wholesale_min = THRESHOLDS["count"]
     else:
-        return "mixed"
+        return "wholesale"
     
     if qty < retail_max:
         return "retail"
-    elif qty >= wholesale_min:
-        return "wholesale"
-    return "mixed"
+    return "wholesale"
 
 
 def get_country_name(code: str) -> str:
