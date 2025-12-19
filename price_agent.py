@@ -14,6 +14,7 @@ from openai import OpenAI
 import json
 import os
 import re
+from statistics import median
 from typing import Optional, Literal
 from dataclasses import dataclass, asdict
 from dotenv import load_dotenv
@@ -70,11 +71,25 @@ def determine_source_type(quantity: float, unit: str) -> Literal["retail", "whol
         qty = quantity
         retail_max, wholesale_min = THRESHOLDS["count"]
     else:
-        return "wholesale"
+        return "retail"
     
     if qty < retail_max:
         return "retail"
     return "wholesale"
+
+
+def calculate_median(prices: list[float]) -> Optional[float]:
+    """Calculate the median of a list of prices.
+    
+    Args:
+        prices: List of price values (floats)
+        
+    Returns:
+        The median value, or None if the list is empty
+    """
+    if not prices:
+        return None
+    return median(prices)
 
 
 class PriceResearchAgent:
@@ -83,56 +98,82 @@ class PriceResearchAgent:
     SYSTEM_PROMPT = """You are an expert international trade price analyst specializing in commodity valuation, customs declarations, and cross-border pricing research.
 
 ## YOUR MISSION
-Find accurate, verifiable FOB (Free On Board) unit prices for goods in international trade contexts.
+Find accurate, verifiable unit prices for goods in international trade contexts.
 Your research directly impacts customs valuations and trade decisions, so accuracy and source quality are paramount.
-Use web search to have the most accurate and up to date information. Use your own knowledge and experience to make the best decision.
-
-**CRITICAL: Return FOB prices only. Do NOT include freight, insurance, or any other shipping costs (CIF, CFR, etc.). If you only find CIF prices, estimate the FOB price by deducting typical freight/insurance costs (usually 5-15% depending on route).**
+**IMPORTANT: Always return prices in USD.**
 
 ## SEARCH PROTOCOL (Strict "Waterfall" Logic)
-You must execute your research in the following strict order. Do not skip to Step 2 unless Step 1 fails.
+Follow this strict search order. Stop as soon as you find reliable data:
 
 **STEP 1 (search_tier=1): Global Export from Country of Origin**
-Search for FOB export prices from the Country of Origin to any destination.
-Example query: "[product] FOB price [origin country] export [wholesale/retail] 2025"
+Search for export prices from the Country of Origin to any destination.
 IF FOUND reliable data: Use this, set coo_research=true.
 
 **STEP 2 (search_tier=2): Global Market Price (Fallback)**
-If Step 1 yields no verifiable data, search for global FOB market prices.
-Example query: "[product] FOB [wholesale/retail] price per [unit] international market 2025"
+If Step 1 yields no verifiable data, search for global market prices.
 IF FOUND: Use this data, set coo_research=false.
 
 ## IMPORTANT RULES
-1. Set coo_research=true in the response if you found any sources from the origin country, false otherwise
-2. Data Source Type is the type of data source you are using to find the price. It can be retail or wholesale.
-3. Convert prices to target currency. If conversion fails, fallback to USD
-4. All currencies should be written in ISO4217, countries in ISO3166
-5. All prices should be in the Target currency
-6. **Always return FOB prices** - exclude freight, insurance, and delivery costs
+1. Set coo_research=true ONLY if you found sources from the origin country
+2. Data Source Type (retail/wholesale) is provided - search accordingly
+3. Convert any found prices to USD
+4. All countries in ISO3166 format
+5. Calculate confidence based on source quality and data consistency
+6. After gathering sufficient information, provide your final answer as a JSON object
+
+## SOURCES - STRICT RELEVANCE REQUIRED
+**CRITICAL: Only include sources with DIRECT price data for the EXACT product being searched.**
+
+**RELEVANCE REQUIREMENT:**
+- Only include sources that explicitly price the specific product (same product name/type)
+- Do NOT include general market reports, industry overviews, or unrelated product prices
+- Do NOT include sources for similar but different products
+- Each source must have a concrete, extractable unit price for the requested product
 
 **RECENCY REQUIREMENT: Only use sources from the last 6 months.**
 - Prioritize the most recent data available
 - Discard sources older than 6 months from the current date
 - If only older sources are available, note this limitation in the notes and reduce confidence accordingly
-- Do not include pricing sources used to convert the price to the target currency
 
+**PRICE DATA REQUIREMENT: Only include sources with actual price information.**
+- Every source MUST have an extracted_price value (not null)
 
+For each source, provide:
+- "title": Descriptive title including product name, trade route, and date if available
+- "url": Full URL to the source
+- "country": ISO3166 code of the country the data pertains to
+- "type": One of "retail", "wholesale", "official", "market", "customs", "other"
+- "price_raw": Complete context - the exact figures, quantities, dates as found
+- "extracted_price": Numeric value you extracted (per unit) - REQUIRED, must not be null
+- "extracted_currency": ISO4217 currency code
+- "extracted_unit": Unit format like "USD/kg"
+## NOTES FIELD - DETAILED ANALYSIS REQUIRED
+The "notes" field must contain a comprehensive analytical explanation including:
 
-OUTPUT JSON ONLY:
+1. **Search Tier Used**: State which tier (1 or 2) produced the data and why earlier tier failed (if applicable)
+2. **Data Sources Analysis**: For each source, explain what data was extracted (quantities, values, dates)
+3. **Price Calculation**: Show your math - how you derived the unit price from raw data
+   - Example: "$50,940.82 for 24,750 kg = $2.06/kg"
+4. **Cross-Validation**: If multiple sources exist, compare their prices and explain consistency/discrepancies
+
+Example notes structure:
+"No direct customs or trade data was found for exports of [PRODUCT] from [ORIGIN], so search_tier=2 and coo_research=false. Instead, [X] international customs records were used... The [ORIGIN]→[COUNTRY1] shipment shows $X for Y kg, giving Z USD/kg. The [ORIGIN]→[COUNTRY2] shipment shows... To estimate a reasonable valuation, I selected the median of prices [A, B, C] = B USD/kg."
+
+## OUTPUT FORMAT
+After your research, provide the final answer as a JSON object with this structure:
 {
-  "unit_price": <number|null>,
-  "currency": "<ISO4217>",
+  "currency": "USD",
   "unit_of_measure": "<normalized unit>",
   "quantity_searched": <number>,
   "quantity_unit": "<original unit>",
   "coo_research": <boolean>,
-  "currency_converted": <boolean>,
-  "currency_fallback": "<ISO4217|null>",
-  "fx_rate": {"rate": <number|null>, "from": "<ISO4217>", "to": "<ISO4217>", "timestamp_utc": "<ISO8601|null>", "source": "<string|null>"},
-  "sources": [{"title": "<string>", "url": "<url>", "country": "<ISO3166>", "type": "<retail|wholesale|official|market|customs|other>", "price_raw": "<string>", "extracted_price": <number|null>, "extracted_currency": "<ISO4217|null>", "extracted_unit": "<string|null>"}],
+  "sources": [
+    // INCLUDE ALL SOURCES - pricing sources, FX sources, benchmark sources, etc.
+    {"title": "<descriptive title with product, route, date>", "url": "<url>", "country": "<ISO3166>", "type": "<retail|wholesale|official|market|customs|other>", "price_raw": "<full context: value, quantity, product, route, date>", "extracted_price": <number|null>, "extracted_currency": "<ISO4217|null>", "extracted_unit": "<string like 'USD/kg'>"}
+  ],
   "confidence": <0.0-1.0>,
-  "notes": "<string>",
-  "error": <null|"INVALID_INPUT"|"NO_DATA"|"FX_FAIL">
+  "notes": "<DETAILED analytical explanation as described above>",
+  "error": <null|"INVALID_INPUT"|"NO_DATA">
 }"""
 
     def __init__(self):
@@ -171,7 +212,7 @@ OUTPUT JSON ONLY:
 - Data Source Type: {source_type.upper()}
 - Target currency: {target_currency}
 
-Search {get_country_name(origin)} sources first. Return FOB price per {normalize_unit(unit_of_measure)} in {target_currency}.
+Search {get_country_name(origin)} sources first. Return FOB price per {normalize_unit(unit_of_measure)}.
 **Important: Exclude freight, insurance, and shipping costs. Return FOB price only.**"""
 
         try:
@@ -180,11 +221,18 @@ Search {get_country_name(origin)} sources first. Return FOB price per {normalize
                 tools=[{"type": "web_search"}],
                 instructions=self.SYSTEM_PROMPT,
                 input=prompt,
+                temperature=0,  # Set to 0 for consistent, deterministic results
             )
             
             result = json.loads(response.output_text)
+            
+            # Calculate median from source extracted_price values
+            sources = result.get("sources", [])
+            prices = [s.get("extracted_price") for s in sources if s.get("extracted_price") is not None]
+            unit_price = calculate_median(prices)
+            
             return PricePrediction(
-                unit_price=result.get("unit_price"),
+                unit_price=unit_price,
                 currency=result.get("currency", target_currency),
                 unit_of_measure=result.get("unit_of_measure", normalize_unit(unit_of_measure)),
                 quantity_searched=result.get("quantity_searched", quantity),
@@ -194,7 +242,7 @@ Search {get_country_name(origin)} sources first. Return FOB price per {normalize
                 currency_converted=result.get("currency_converted", False),
                 currency_fallback=result.get("currency_fallback"),
                 fx_rate=result.get("fx_rate"),
-                sources=result.get("sources", []),
+                sources=sources,
                 confidence=result.get("confidence", 0.0),
                 notes=result.get("notes", ""),
                 error=result.get("error")
@@ -222,7 +270,7 @@ if __name__ == "__main__":
         country_of_origin="QA",
         country_of_destination="PK",
         description="LOW DENSITY POLYETHYLENE (LDPE) LOTRENE MG70",
-        quantity=5000,
+        quantity=500,
         unit_of_measure="kg"
     )
     print(json.dumps(agent.to_dict(result), indent=2))

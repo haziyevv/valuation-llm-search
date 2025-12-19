@@ -54,4 +54,4 @@ UNIT_MAP = {
 }
 
 # Quantity thresholds
-THRESHOLDS = {"weight": (100, 1000), "volume": (100, 1000), "count": (50, 500)}
+THRESHOLDS = {"weight": (500, 1000), "volume": (500, 1000), "count": (100, 500)}
