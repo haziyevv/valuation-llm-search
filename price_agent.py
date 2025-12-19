@@ -37,7 +37,7 @@ from utils import (
     determine_source_type,
     get_country_name,
 )
-
+from statistics import median
 
 # Pydantic models for structured output
 class FXRate(BaseModel):
@@ -81,6 +81,19 @@ class PricePrediction(BaseModel):
     notes: str = ""
     error: Optional[Literal["INVALID_INPUT", "NO_DATA", "FX_FAIL"]] = None
 
+def calculate_median(prices: list[float]) -> Optional[float]:
+    """Calculate the median of a list of prices.
+    
+    Args:
+        prices: List of price values (floats)
+        
+    Returns:
+        The median value, or None if the list is empty
+    """
+    if not prices:
+        return None
+    return median(prices)
+
 
 class PriceResearchAgent:
     """Price research agent with web search capability using LlamaIndex and Azure OpenAI."""
@@ -119,6 +132,12 @@ IF FOUND: Use this data, set coo_research=false.
 ## SOURCES - COMPREHENSIVE DOCUMENTATION REQUIRED
 **CRITICAL: Include ALL sources that contributed to the final price in the "sources" array.**
 
+**RELEVANCE REQUIREMENT:**
+- Only include sources that explicitly price the specific product (same product name/type)
+- Do NOT include general market reports, industry overviews, or unrelated product prices
+- Do NOT include sources for similar but different products
+- Each source must have a concrete, extractable unit price for the requested product
+
 **RECENCY REQUIREMENT: Only use sources from the last 6 months.**
 - Prioritize the most recent data available
 - Discard sources older than 6 months from the current date
@@ -126,14 +145,6 @@ IF FOUND: Use this data, set coo_research=false.
 
 **PRICE DATA REQUIREMENT: Only include sources with actual price information.**
 - Every source MUST have an extracted_price value (not null)
-- Do NOT include sources that only provide general information without specific prices
-- Do NOT include sources where you could not extract a concrete numeric price
-
-This includes:
-- ✅ Primary pricing sources used to calculate the final price
-- ✅ Secondary/supporting sources that informed your analysis
-- ✅ Market benchmark sources used for cross-validation
-- ✅ Any customs, trade, or statistical database sources consulted
 
 For each source, provide:
 - "title": Descriptive title including product name, trade route, and date if available
@@ -153,7 +164,6 @@ The "notes" field must contain a comprehensive analytical explanation including:
 3. **Price Calculation**: Show your math - how you derived the unit price from raw data
    - Example: "$50,940.82 for 24,750 kg = $2.06/kg"
 4. **Cross-Validation**: If multiple sources exist, compare their prices and explain consistency/discrepancies
-5. **Final Price Reasoning**: Explain how you arrived at the final unit_price (averaging, weighting, selection criteria)
 
 Example notes structure:
 "No direct customs or trade data was found for exports of [PRODUCT] from [ORIGIN], so search_tier=2 and coo_research=false. Instead, [X] international customs records were used... The [ORIGIN]→[COUNTRY1] shipment shows $X for Y kg, giving Z USD/kg. The [ORIGIN]→[COUNTRY2] shipment shows... To estimate a reasonable valuation, I averaged: (A + B) / 2 ≈ C USD/kg."
@@ -161,14 +171,13 @@ Example notes structure:
 ## OUTPUT FORMAT
 After your research, provide the final answer as a JSON object with this structure:
 {
-  "unit_price": <number|null>,
   "currency": "USD",
   "unit_of_measure": "<normalized unit>",
   "quantity_searched": <number>,
   "quantity_unit": "<original unit>",
   "coo_research": <boolean>,
   "sources": [
-    // INCLUDE ALL SOURCES - pricing sources, FX sources, benchmark sources, etc.
+    // INCLUDE ALL SOURCES - pricing sources, benchmark sources, etc.
     {"title": "<descriptive title with product, route, date>", "url": "<url>", "country": "<ISO3166>", "type": "<retail|wholesale|official|market|customs|other>", "price_raw": "<full context: value, quantity, product, route, date>", "extracted_price": <number|null>, "extracted_currency": "<ISO4217|null>", "extracted_unit": "<string like 'USD/kg'>"}
   ],
   "confidence": <0.0-1.0>,
@@ -269,7 +278,9 @@ After gathering information, provide your final answer as a JSON object with uni
             
             if result:
                 # Get the USD price from LLM
-                unit_price_usd = result.get("unit_price")
+                sources = result.get("sources", [])
+                prices = [s.get("extracted_price") for s in sources if s.get("extracted_price") is not None]
+                unit_price_usd = calculate_median(prices)
                 
                 # Convert to target currency using provided exchange rate
                 if unit_price_usd is not None:
