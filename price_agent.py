@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field, ConfigDict
 from llama_index.core.agent.workflow import FunctionAgent
 from llama_index.core.tools import FunctionTool
 from llama_index.llms.azure_openai import AzureOpenAI
+from statistics import median
 
 from config import (
     AZURE_OPENAI_ENDPOINT,
@@ -83,6 +84,20 @@ class PricePrediction(BaseModel):
     error: Optional[Literal["INVALID_INPUT", "NO_DATA", "FX_FAIL"]] = None
 
 
+def calculate_median(prices: list[float]) -> Optional[float]:
+    """Calculate the median of a list of prices.
+    
+    Args:
+        prices: List of price values (floats)
+        
+    Returns:
+        The median value, or None if the list is empty
+    """
+    if not prices:
+        return None
+    return median(prices)
+
+
 class PriceResearchAgent:
     """Price research agent with web search capability using LlamaIndex and Azure OpenAI."""
 
@@ -99,19 +114,12 @@ You have access to a web_search tool. Use it strategically to find pricing infor
 ## SEARCH PROTOCOL (Strict "Waterfall" Logic)
 Follow this strict search order. Stop as soon as you find reliable data:
 
-**STEP 1 (search_tier=1): Bilateral Trade (Country of Origin -> Country of Destination)**
-Search for export prices specifically from the Country of Origin to the Country of Destination.
-Example query: "[product] price [origin country] to [destination country] export [wholesale/retail] 2025"
+**STEP 1 (search_tier=1): Global Export from Country of Origin**
+Search for export prices from the Country of Origin to any destination.
 IF FOUND reliable data: Use this, set coo_research=true.
 
-**STEP 2 (search_tier=2): Global Export (COO -> World)**
-If Step 1 yields no verifiable data, search for general export prices from the Country of Origin.
-Example query: "[product] price [origin country] export [wholesale/retail] 2025"
-IF FOUND: Use this data, set coo_research=false.
-
-**STEP 3 (search_tier=3): Global Market Price (Fallback)**
-If Steps 1 and 2 yield no data, search for global market prices.
-Example query: "[product] [wholesale/retail] price per [unit] international market 2025"
+**STEP 2 (search_tier=2): Global Market Price (Fallback)**
+If Step 1 yields no verifiable data, search for global market prices.
 IF FOUND: Use this data, set coo_research=false.
 
 ## IMPORTANT RULES
@@ -123,7 +131,13 @@ IF FOUND: Use this data, set coo_research=false.
 6. After gathering sufficient information, provide your final answer as a JSON object
 
 ## SOURCES - COMPREHENSIVE DOCUMENTATION REQUIRED
-**CRITICAL: Include ALL sources that contributed to the final price in the "sources" array.**
+**CRITICAL: Only include sources with DIRECT price data for the EXACT product being searched.**
+
+**RELEVANCE REQUIREMENT:**
+- Only include sources that explicitly price the specific product (same product name/type)
+- Do NOT include general market reports, industry overviews, or unrelated product prices
+- Do NOT include sources for similar but different products
+- Each source must have a concrete, extractable unit price for the requested product
 
 **RECENCY REQUIREMENT: Only use sources from the last 6 months.**
 - Prioritize the most recent data available
@@ -132,14 +146,6 @@ IF FOUND: Use this data, set coo_research=false.
 
 **PRICE DATA REQUIREMENT: Only include sources with actual price information.**
 - Every source MUST have an extracted_price value (not null)
-- Do NOT include sources that only provide general information without specific prices
-- Do NOT include sources where you could not extract a concrete numeric price
-
-This includes:
-- ✅ Primary pricing sources used to calculate the final price
-- ✅ Secondary/supporting sources that informed your analysis
-- ✅ Market benchmark sources used for cross-validation
-- ✅ Any customs, trade, or statistical database sources consulted
 
 For each source, provide:
 - "title": Descriptive title including product name, trade route, and date if available
@@ -154,14 +160,11 @@ For each source, provide:
 ## NOTES FIELD - DETAILED ANALYSIS REQUIRED
 The "notes" field must contain a comprehensive analytical explanation including:
 
-1. **Search Tier Used**: State which tier (1, 2, or 3) produced the data and why earlier tiers failed (if applicable)
+1. **Search Tier Used**: State which tier (1 or 2) produced the data and why earlier tier failed (if applicable)
 2. **Data Sources Analysis**: For each source, explain what data was extracted (quantities, values, dates)
 3. **Price Calculation**: Show your math - how you derived the unit price from raw data
    - Example: "$50,940.82 for 24,750 kg = $2.06/kg"
 4. **Cross-Validation**: If multiple sources exist, compare their prices and explain consistency/discrepancies
-5. **Final Price Reasoning**: Explain how you arrived at the final unit_price (averaging, weighting, selection criteria)
-6. **Confidence Justification**: Explain why you assigned the confidence score
-7. **Caveats**: Note any limitations (e.g., "No direct AT→PK trade data found, using AT→other destinations as proxy")
 
 Example notes structure:
 "No direct customs or trade data was found for exports of [PRODUCT] from [ORIGIN] to [DESTINATION], so search_tier=3 and coo_research=false. Instead, [X] international customs records were used... The [ORIGIN]→[COUNTRY1] shipment shows $X for Y kg, giving Z USD/kg. The [ORIGIN]→[COUNTRY2] shipment shows... To estimate a reasonable valuation, I averaged: (A + B) / 2 ≈ C USD/kg. Source_type is 'mixed' because... This estimate should be treated as..."
@@ -169,7 +172,6 @@ Example notes structure:
 ## OUTPUT FORMAT
 After your research, provide the final answer as a JSON object with this structure:
 {
-  "unit_price": <number|null>,
   "currency": "USD",
   "unit_of_measure": "<normalized unit>",
   "quantity_searched": <number>,
@@ -277,8 +279,12 @@ After gathering information, provide your final answer as a JSON object with uni
             
             if result:
                 # Get the USD price from LLM
-                unit_price_usd = result.get("unit_price")
-                
+
+                            # Calculate median from source extracted_price values
+                sources = result.get("sources", [])
+                prices = [s.get("extracted_price") for s in sources if s.get("extracted_price") is not None]
+                unit_price_usd = calculate_median(prices)
+
                 # Convert to target currency using provided exchange rate
                 if unit_price_usd is not None:
                     unit_price = unit_price_usd * exchange_rate_usd

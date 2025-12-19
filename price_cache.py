@@ -380,20 +380,20 @@ class CachedPriceService:
         prediction_dict = self.agent.to_dict(agent_result)
         
         # Step 3: Store in cache (only if we got a valid result)
-        if agent_result.error is None and agent_result.unit_price is not None:
-            doc_id = self.cache.store(
-                description=description,
-                country_of_origin=country_of_origin,
-                country_of_destination=country_of_destination,
-                unit_of_measure=unit_of_measure,
-                prediction=prediction_dict,
-            )
-            logger.info(f"Stored new prediction in cache with ID: {doc_id}")
-        else:
-            logger.warning(
-                f"Not caching result due to error or missing price: "
-                f"error={agent_result.error}, unit_price={agent_result.unit_price}"
-            )
+        # if agent_result.error is None and agent_result.unit_price is not None:
+        #     doc_id = self.cache.store(
+        #         description=description,
+        #         country_of_origin=country_of_origin,
+        #         country_of_destination=country_of_destination,
+        #         unit_of_measure=unit_of_measure,
+        #         prediction=prediction_dict,
+        #     )
+        #     logger.info(f"Stored new prediction in cache with ID: {doc_id}")
+        # else:
+        #     logger.warning(
+        #         f"Not caching result due to error or missing price: "
+        #         f"error={agent_result.error}, unit_price={agent_result.unit_price}"
+        #     )
         
         return {
             "prediction": prediction_dict,
