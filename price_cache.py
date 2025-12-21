@@ -66,7 +66,6 @@ class PriceCache:
                 TextField("search_text"),
                 TextField("description"),
                 TextField("country_of_origin"),
-                TextField("country_of_destination"),
                 TextField("unit_of_measure"),
                 NumericField("unit_price"),
                 TextField("currency"),
@@ -105,11 +104,10 @@ class PriceCache:
         self,
         description: str,
         country_of_origin: str,
-        country_of_destination: str,
         unit_of_measure: str
     ) -> str:
         """Create searchable text combining description and trade context."""
-        return f"{description} | Origin: {country_of_origin} | Destination: {country_of_destination} | Unit: {unit_of_measure}"
+        return f"{description} | Origin: {country_of_origin} | Unit: {unit_of_measure}"
     
     def _is_expired(self, timestamp_str: str) -> bool:
         """Check if a cache entry has expired."""
@@ -124,7 +122,6 @@ class PriceCache:
         self,
         description: str,
         country_of_origin: str,
-        country_of_destination: str,
         unit_of_measure: str,
         n_results: int = 1
     ) -> Optional[dict]:
@@ -135,7 +132,7 @@ class PriceCache:
             Cached prediction dict if found and similar enough, None otherwise
         """
         search_text = self._create_search_text(
-            description, country_of_origin, country_of_destination, unit_of_measure
+            description, country_of_origin, unit_of_measure
         )
         
         embedding = self._get_embedding(search_text)
@@ -196,7 +193,6 @@ class PriceCache:
         self,
         description: str,
         country_of_origin: str,
-        country_of_destination: str,
         unit_of_measure: str,
         prediction: dict
     ) -> str:
@@ -207,7 +203,7 @@ class PriceCache:
             The ID of the stored entry
         """
         search_text = self._create_search_text(
-            description, country_of_origin, country_of_destination, unit_of_measure
+            description, country_of_origin, unit_of_measure
         )
         
         embedding = self._get_embedding(search_text)
@@ -220,7 +216,6 @@ class PriceCache:
                 "search_text": search_text,
                 "description": description,
                 "country_of_origin": country_of_origin,
-                "country_of_destination": country_of_destination,
                 "unit_of_measure": unit_of_measure,
                 "unit_price": prediction.get("unit_price") or 0,
                 "currency": prediction.get("currency", ""),
@@ -308,7 +303,6 @@ class CachedPriceService:
         self,
         description: str,
         country_of_origin: str,
-        country_of_destination: str,
         unit_of_measure: str,
         quantity: float,
         exchange_rate_usd: float,
@@ -324,7 +318,6 @@ class CachedPriceService:
         Args:
             description: Product/goods description
             country_of_origin: ISO3166 country code for origin
-            country_of_destination: ISO3166 country code for destination
             unit_of_measure: Unit of measure (kg, tonne, etc.)
             quantity: Quantity of goods
             exchange_rate_usd: Exchange rate from USD to target currency
@@ -345,7 +338,6 @@ class CachedPriceService:
         cached_result = self.cache.search(
             description=description,
             country_of_origin=country_of_origin,
-            country_of_destination=country_of_destination,
             unit_of_measure=unit_of_measure,
         )
         
@@ -368,7 +360,6 @@ class CachedPriceService:
         
         agent_result = self.agent.research_price(
             country_of_origin=country_of_origin,
-            country_of_destination=country_of_destination,
             description=description,
             quantity=quantity,
             unit_of_measure=unit_of_measure,
@@ -451,7 +442,6 @@ if __name__ == "__main__":
         doc_id = cache.store(
             description="LOW DENSITY POLYETHYLENE (LDPE) LOTRENE MG70",
             country_of_origin="QA",
-            country_of_destination="PK",
             unit_of_measure="kg",
             prediction=test_prediction
         )
@@ -460,7 +450,6 @@ if __name__ == "__main__":
         result = cache.search(
             description="LDPE Polyethylene Lotrene",
             country_of_origin="QA",
-            country_of_destination="PK",
             unit_of_measure="kg"
         )
         
@@ -485,7 +474,6 @@ if __name__ == "__main__":
         result1 = service.get_price(
             description="LOW DENSITY POLYETHYLENE (LDPE) LOTRENE MG70",
             country_of_origin="QA",
-            country_of_destination="PK",
             unit_of_measure="kg",
             quantity=5000,
             exchange_rate_usd=278.5,
@@ -501,7 +489,6 @@ if __name__ == "__main__":
         result2 = service.get_price(
             description="LDPE Polyethylene Lotrene MG70 resin",
             country_of_origin="QA",
-            country_of_destination="PK",
             unit_of_measure="kg",
             quantity=5000,
             exchange_rate_usd=278.5,

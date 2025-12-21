@@ -42,7 +42,6 @@ from price_agent import PriceResearchAgent
 agent = PriceResearchAgent()
 result = agent.research_price(
     country_of_origin="QA",        # ISO3166
-    country_of_destination="PK",   # ISO3166
     description="LDPE LOTRENE MG70",
     quantity=5000,
     unit_of_measure="kg",

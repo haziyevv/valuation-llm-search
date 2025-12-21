@@ -75,7 +75,6 @@ if submitted:
                 response = service.get_price(
                     description=description,
                     country_of_origin=countries[origin],
-                    country_of_destination=countries[destination],
                     unit_of_measure=unit,
                     quantity=quantity,
                     exchange_rate_usd=exchange_rate,
