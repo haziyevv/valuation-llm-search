@@ -66,7 +66,6 @@ class PriceCache:
                 TextField("search_text"),
                 TextField("description"),
                 TextField("country_of_origin"),
-                TextField("country_of_destination"),
                 TextField("unit_of_measure"),
                 NumericField("unit_price"),
                 TextField("currency"),
@@ -304,7 +303,6 @@ class CachedPriceService:
         self,
         description: str,
         country_of_origin: str,
-        country_of_destination: str,
         unit_of_measure: str,
         quantity: float,
         preferred_currency: Optional[str] = None,
@@ -319,7 +317,6 @@ class CachedPriceService:
         Args:
             description: Product/goods description
             country_of_origin: ISO3166 country code for origin
-            country_of_destination: ISO3166 country code for destination
             unit_of_measure: Unit of measure (kg, tonne, etc.)
             quantity: Quantity of goods
             preferred_currency: Preferred currency code (optional)
@@ -333,7 +330,7 @@ class CachedPriceService:
                 "cached_at": str,     # Timestamp (if cache hit)
             }
         """
-        # Step 1: Check cache for similar item (COO-based, destination agnostic)
+        # Step 1: Check cache for similar item (COO-based agnostic)
         logger.info(f"Checking cache for: {description[:50]}...")
         
         cached_result = self.cache.search(
@@ -361,7 +358,6 @@ class CachedPriceService:
         
         agent_result = self.agent.research_price(
             country_of_origin=country_of_origin,
-            country_of_destination=country_of_destination,
             description=description,
             quantity=quantity,
             unit_of_measure=unit_of_measure,
@@ -474,7 +470,6 @@ if __name__ == "__main__":
         result1 = service.get_price(
             description="LOW DENSITY POLYETHYLENE (LDPE) LOTRENE MG70",
             country_of_origin="QA",
-            country_of_destination="PK",
             unit_of_measure="kg",
             quantity=5000,
         )
@@ -488,7 +483,6 @@ if __name__ == "__main__":
         result2 = service.get_price(
             description="LDPE Polyethylene Lotrene MG70 resin",
             country_of_origin="QA",
-            country_of_destination="PK",
             unit_of_measure="kg",
             quantity=5000,
         )

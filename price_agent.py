@@ -11,14 +11,19 @@ An intelligent agent for international trade price research with:
 """
 
 from openai import OpenAI
+import csv
 import json
 import os
 import re
+from datetime import datetime, timedelta
 from statistics import median
 from typing import Optional, Literal
 from dataclasses import dataclass, asdict
 from dotenv import load_dotenv
 from utils import ISO3166_COUNTRIES, ISO4217_CURRENCIES, COUNTRY_TO_CURRENCY, UNIT_MAP, THRESHOLDS
+
+# Maximum age of sources in days
+SOURCE_MAX_AGE_DAYS = 90
 load_dotenv()
 
 MODEL_NAME = "gpt-5.1"
@@ -92,6 +97,35 @@ def calculate_median(prices: list[float]) -> Optional[float]:
     return median(prices)
 
 
+def filter_recent_sources(sources: list[dict], max_age_days: int = SOURCE_MAX_AGE_DAYS) -> list[dict]:
+    """Filter sources to only include those within the maximum age limit.
+    
+    Args:
+        sources: List of source dictionaries, each should have a "date" field (YYYY-MM-DD)
+        max_age_days: Maximum age in days for a source to be considered valid
+        
+    Returns:
+        List of sources that are within the age limit
+    """
+    cutoff_date = datetime.now() - timedelta(days=max_age_days)
+    valid_sources = []
+    
+    for source in sources:
+        source_date_str = source.get("date")
+        if source_date_str:
+            try:
+                # Parse the date (supports YYYY-MM-DD format)
+                source_date = datetime.strptime(source_date_str, "%Y-%m-%d")
+                if source_date >= cutoff_date:
+                    valid_sources.append(source)
+            except ValueError:
+                # If date parsing fails, skip this source
+                pass
+        # Sources without a date are excluded (strict mode)
+    
+    return valid_sources
+
+
 class PriceResearchAgent:
     """Price research agent with web search capability."""
     
@@ -102,24 +136,38 @@ Find accurate, verifiable unit prices for goods in international trade contexts.
 Your research directly impacts customs valuations and trade decisions, so accuracy and source quality are paramount.
 **IMPORTANT: Always return prices in USD.**
 
-## SEARCH PROTOCOL (Strict "Waterfall" Logic)
-Follow this strict search order. Stop as soon as you find reliable data:
+Only include sources published on or after the Source Cutoff Date.
 
-**STEP 1 (search_tier=1): Global Export from Country of Origin**
-Search for export prices from the Country of Origin to any destination.
-IF FOUND reliable data: Use this, set coo_research=true.
+## RECENCY GATE (HARD REQUIREMENT)
+You will be given a **Source Cutoff Date** in the user prompt (YYYY-MM-DD).
 
-**STEP 2 (search_tier=2): Global Market Price (Fallback)**
-If Step 1 yields no verifiable data, search for global market prices.
-IF FOUND: Use this data, set coo_research=false.
+**You MUST NOT include any source older than the Source Cutoff Date.**
+- Every source MUST include a `date` field in YYYY-MM-DD.
+- If a source page does not clearly show a publish/record date, treat its date as UNKNOWN and **do not include it**.
+- If a source only provides month/year (no day), treat it as UNKNOWN and **do not include it**.
+
+**Final self-check before producing JSON (MANDATORY):**
+1. Compute `cutoff_date_used` EXACTLY as provided in the user prompt.
+2. For each source in `sources`, verify `date >= cutoff_date_used`.
+3. If any source fails this check, you MUST remove it from `sources` (do not “keep it anyway”, do not justify it, do not include it).
+4. After removal:
+   - If `sources` is empty, return `error="NO_DATA"` and explain in `notes` that no sources met the cutoff date.
+   - Otherwise continue with remaining sources only.
 
 ## IMPORTANT RULES
-1. Set coo_research=true ONLY if you found sources from the origin country
-2. Data Source Type (retail/wholesale) is provided - search accordingly
-3. Convert any found prices to USD
-4. All countries in ISO3166 format
-5. Calculate confidence based on source quality and data consistency
-6. After gathering sufficient information, provide your final answer as a JSON object
+1. Data Source Type (retail/wholesale) is provided - search accordingly
+2. Convert any found prices to USD
+3. All countries in ISO3166 format
+4. Calculate confidence based on source quality and data consistency
+5. After gathering sufficient information, provide your final answer as a JSON object
+
+## UNIT CONVERSION (CRITICAL)
+**You MUST convert all prices to the EXACT unit requested by the user.**
+- If user requests price per "kg", convert ALL prices to USD/kg
+- If source shows price per tonne, DIVIDE by 1000 to get per kg
+- If source shows price per gram, MULTIPLY by 1000 to get per kg
+- The "extracted_price" field MUST be in the requested unit, NOT the source's original unit
+- Example: Source shows "$1200/tonne" → extracted_price = 1.20 (USD/kg)
 
 ## SOURCES - STRICT RELEVANCE REQUIRED
 **CRITICAL: Only include sources with DIRECT price data for the EXACT product being searched.**
@@ -130,10 +178,9 @@ IF FOUND: Use this data, set coo_research=false.
 - Do NOT include sources for similar but different products
 - Each source must have a concrete, extractable unit price for the requested product
 
-**RECENCY REQUIREMENT: Only use sources from the last 6 months.**
-- Prioritize the most recent data available
-- Discard sources older than 6 months from the current date
-- If only older sources are available, note this limitation in the notes and reduce confidence accordingly
+**EXCLUDE EXCHANGE RATE SOURCES:**
+- Do NOT include exchange rate or FX sources in the sources list
+- You may use exchange rates internally for conversion, but do NOT list them as sources
 
 **PRICE DATA REQUIREMENT: Only include sources with actual price information.**
 - Every source MUST have an extracted_price value (not null)
@@ -142,7 +189,8 @@ For each source, provide:
 - "title": Descriptive title including product name, trade route, and date if available
 - "url": Full URL to the source
 - "country": ISO3166 code of the country the data pertains to
-- "type": One of "retail", "wholesale", "official", "market", "customs", "other"
+- "type": One of "retail" or "wholesale"
+- "date": ISO8601 date (YYYY-MM-DD) when the price data was published/recorded - REQUIRED for validation
 - "price_raw": Complete context - the exact figures, quantities, dates as found
 - "extracted_price": Numeric value you extracted (per unit) - REQUIRED, must not be null
 - "extracted_currency": ISO4217 currency code
@@ -150,14 +198,13 @@ For each source, provide:
 ## NOTES FIELD - DETAILED ANALYSIS REQUIRED
 The "notes" field must contain a comprehensive analytical explanation including:
 
-1. **Search Tier Used**: State which tier (1 or 2) produced the data and why earlier tier failed (if applicable)
-2. **Data Sources Analysis**: For each source, explain what data was extracted (quantities, values, dates)
-3. **Price Calculation**: Show your math - how you derived the unit price from raw data
+1. **Data Sources Analysis**: For each source, explain what data was extracted (quantities, values, dates)
+2. **Price Calculation**: Show your math - how you derived the unit price from raw data
    - Example: "$50,940.82 for 24,750 kg = $2.06/kg"
-4. **Cross-Validation**: If multiple sources exist, compare their prices and explain consistency/discrepancies
 
-Example notes structure:
-"No direct customs or trade data was found for exports of [PRODUCT] from [ORIGIN], so search_tier=2 and coo_research=false. Instead, [X] international customs records were used... The [ORIGIN]→[COUNTRY1] shipment shows $X for Y kg, giving Z USD/kg. The [ORIGIN]→[COUNTRY2] shipment shows... To estimate a reasonable valuation, I selected the median of prices [A, B, C] = B USD/kg."
+**If error="NO_DATA"**, the notes MUST:
+- Explicitly state that **no sources met the Source Cutoff Date**
+- Briefly describe what you searched (origin export first, then global market)
 
 ## OUTPUT FORMAT
 After your research, provide the final answer as a JSON object with this structure:
@@ -166,10 +213,9 @@ After your research, provide the final answer as a JSON object with this structu
   "unit_of_measure": "<normalized unit>",
   "quantity_searched": <number>,
   "quantity_unit": "<original unit>",
-  "coo_research": <boolean>,
   "sources": [
-    // INCLUDE ALL SOURCES - pricing sources, FX sources, benchmark sources, etc.
-    {"title": "<descriptive title with product, route, date>", "url": "<url>", "country": "<ISO3166>", "type": "<retail|wholesale|official|market|customs|other>", "price_raw": "<full context: value, quantity, product, route, date>", "extracted_price": <number|null>, "extracted_currency": "<ISO4217|null>", "extracted_unit": "<string like 'USD/kg'>"}
+    // ONLY include PRODUCT PRICING sources - do NOT include exchange rate/FX sources
+    {"title": "<descriptive title with product, route, date>", "url": "<url>", "country": "<ISO3166>", "type": "<retail|wholesale>", "date": "<YYYY-MM-DD>", "price_raw": "<full context: value, quantity, product, route, date>", "extracted_price": <number>, "extracted_currency": "<ISO4217>", "extracted_unit": "<string like 'USD/kg'>"}
   ],
   "confidence": <0.0-1.0>,
   "notes": "<DETAILED analytical explanation as described above>",
@@ -182,7 +228,6 @@ After your research, provide the final answer as a JSON object with this structu
     def research_price(
         self,
         country_of_origin: str,
-        country_of_destination: str,
         description: str,
         quantity: float,
         unit_of_measure: str,
@@ -191,62 +236,129 @@ After your research, provide the final answer as a JSON object with this structu
         """Research price for goods."""
         # Validate country codes
         origin = country_of_origin.upper().strip()
-        dest = country_of_destination.upper().strip()
         
         if origin not in ISO3166_COUNTRIES:
             return self._error("INVALID_INPUT", f"Invalid origin: {origin}", quantity, unit_of_measure)
-        if dest not in ISO3166_COUNTRIES:
-            return self._error("INVALID_INPUT", f"Invalid destination: {dest}", quantity, unit_of_measure)
         
         # Determine target currency
-        target_currency = preferred_currency.upper() if preferred_currency else get_default_currency(dest)
+        target_currency = 'PKR'
         if target_currency not in ISO4217_CURRENCIES:
             return self._error("INVALID_INPUT", f"Invalid currency: {target_currency}", quantity, unit_of_measure)
         
         # Build prompt
         source_type = determine_source_type(quantity, unit_of_measure)
-        prompt = f"""Find FOB (Free On Board) price for:
+        current_date = datetime.now().strftime("%Y-%m-%d")
+        cutoff_date = (datetime.now() - timedelta(days=SOURCE_MAX_AGE_DAYS)).strftime("%Y-%m-%d")
+        
+        target_unit = normalize_unit(unit_of_measure)
+        prompt = f"""Find unit price for:
 - Product: {description}
-- Country of Origin: {origin} ({get_country_name(origin)})
-- Country of Destination: {dest} ({get_country_name(dest)})
+- Country of Origin: {get_country_name(origin)} 
 - Data Source Type: {source_type.upper()}
 - Target currency: {target_currency}
-
-Search {get_country_name(origin)} sources first. Return FOB price per {normalize_unit(unit_of_measure)}.
-**Important: Exclude freight, insurance, and shipping costs. Return FOB price only.**"""
-
+- Target unit: {target_unit} (CONVERT all prices to USD/{target_unit})
+- Current Date: {current_date}
+- Source Cutoff Date: {cutoff_date}
+"""
+        coo_research = True
         try:
-            response = self.client.responses.create(
+            # --- Tier 1: Origin export prices only (STEP 1) ---
+            tier1_prompt = (
+                prompt
+                + f"\n\nInvestigate unit price per {target_unit} of {description} in {target_currency} exported from {get_country_name(origin)}.\n"
+                + f"Hard rule: ONLY include sources with date >= {cutoff_date}.\n"
+            )
+
+            response1 = self.client.responses.create(
                 model=MODEL_NAME,
                 tools=[{"type": "web_search"}],
                 instructions=self.SYSTEM_PROMPT,
-                input=prompt,
-                temperature=0,  # Set to 0 for consistent, deterministic results
+                input=tier1_prompt,
             )
-            
-            result = json.loads(response.output_text)
-            
-            # Calculate median from source extracted_price values
-            sources = result.get("sources", [])
-            prices = [s.get("extracted_price") for s in sources if s.get("extracted_price") is not None]
-            unit_price = calculate_median(prices)
-            
-            return PricePrediction(
+            result1 = json.loads(response1.output_text)
+
+            raw_sources1 = result1.get("sources", [])
+            sources1 = filter_recent_sources(raw_sources1, SOURCE_MAX_AGE_DAYS)
+            notes1 = result1.get("notes", "")
+
+            # If Tier 1 has not more than 3 recent sources, also run Tier 2 and append its recent sources.
+            sources2: list[dict] = []
+            notes2: str = ""
+            result2: dict = {}
+
+            def _dedupe_sources(items: list[dict]) -> list[dict]:
+                """De-dupe sources, preferring unique URLs, else title+date."""
+                seen: set[str] = set()
+                out: list[dict] = []
+                for s in items:
+                    url = (s.get("url") or "").strip()
+                    title = (s.get("title") or "").strip()
+                    date = (s.get("date") or "").strip()
+                    key = url or f"{title}::{date}"
+                    if not key or key in seen:
+                        continue
+                    seen.add(key)
+                    out.append(s)
+                return out
+
+            if len(sources1) <= 3:
+                coo_research = False
+                # --- Tier 2: Global market price fallback only (STEP 2) ---
+                tier2_prompt = (
+                    prompt
+                    + f"\n\nInvestigate unit price per {target_unit} of {description} in {target_currency}.\n"
+                    + f"Hard rule: ONLY include sources with date >= {cutoff_date}.\n"
+                )
+
+                response2 = self.client.responses.create(
+                    model=MODEL_NAME,
+                    tools=[{"type": "web_search"}],
+                    instructions=self.SYSTEM_PROMPT,
+                    input=tier2_prompt,
+                )
+                result2 = json.loads(response2.output_text)
+
+                raw_sources2 = result2.get("sources", [])
+                sources2 = filter_recent_sources(raw_sources2, SOURCE_MAX_AGE_DAYS)
+                notes2 = result2.get("notes", "")
+
+            combined_sources = _dedupe_sources(sources1 + sources2)
+            combined_prices = [
+                s.get("extracted_price")
+                for s in combined_sources
+                if s.get("extracted_price") is not None
+            ]
+            unit_price = calculate_median(combined_prices)
+
+            merged_notes = notes1
+            if notes2:
+                merged_notes = (notes1 or "") + "\n\n--- Tier 2 (fallback) ---\n" + notes2
+
+            if not combined_prices or unit_price is None:
+                return self._error("NO_DATA", merged_notes, quantity, unit_of_measure)
+
+            # Prefer tier-1 metadata if available; fall back to tier-2.
+            primary_result = result1 if sources1 else (result2 or result1)
+
+            prediction = PricePrediction(
                 unit_price=unit_price,
-                currency=result.get("currency", target_currency),
-                unit_of_measure=result.get("unit_of_measure", normalize_unit(unit_of_measure)),
-                quantity_searched=result.get("quantity_searched", quantity),
-                quantity_unit=result.get("quantity_unit", unit_of_measure),
-                coo_research=result.get("coo_research", False),
+                currency=primary_result.get("currency", target_currency),
+                unit_of_measure=primary_result.get("unit_of_measure", normalize_unit(unit_of_measure)),
+                quantity_searched=primary_result.get("quantity_searched", quantity),
+                quantity_unit=primary_result.get("quantity_unit", unit_of_measure),
+                coo_research=coo_research,
                 source_type=source_type,  # Use pre-determined source_type from input
-                currency_converted=result.get("currency_converted", False),
-                currency_fallback=result.get("currency_fallback"),
-                fx_rate=result.get("fx_rate"),
-                sources=sources,
-                confidence=result.get("confidence", 0.0),
-                notes=result.get("notes", ""),
-                error=result.get("error")
+                currency_converted=primary_result.get("currency_converted", False),
+                currency_fallback=primary_result.get("currency_fallback"),
+                fx_rate=primary_result.get("fx_rate"),
+                sources=combined_sources,
+                confidence=primary_result.get("confidence", 0.0),
+                notes=merged_notes,
+                error=primary_result.get("error"),
             )
+
+            self.save_csv(prediction)
+            return prediction
         except json.JSONDecodeError as e:
             return self._error("INVALID_INPUT", f"Parse error: {e}", quantity, unit_of_measure)
         except Exception as e:
@@ -262,15 +374,47 @@ Search {get_country_name(origin)} sources first. Return FOB price per {normalize
     
     def to_dict(self, prediction: PricePrediction) -> dict:
         return asdict(prediction)
+    
+    def save_csv(self, prediction: PricePrediction, filepath: str = "results.csv") -> None:
+        """Save prediction to CSV file.
+        
+        Args:
+            prediction: PricePrediction object to export
+            filepath: File path to save the CSV (default: results.csv)
+        """
+        with open(filepath, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            
+            # Predicted Price row
+            if prediction.unit_price is not None:
+                price_str = f"{prediction.unit_price:.2f} {prediction.currency}/{prediction.unit_of_measure}"
+            else:
+                price_str = "N/A"
+            writer.writerow(["Predicted Price", price_str])
+            writer.writerow([])  # Empty row for separation
+            
+            # Sources table header
+            writer.writerow(["Title", "URL", "Raw Text", "Date", "Extracted Price"])
+            
+            # Sources data rows
+            for source in prediction.sources:
+                title = source.get("title", "")
+                url = source.get("url", "")
+                raw_text = source.get("price_raw", "")
+                date = source.get("date", "")
+                extracted_price = source.get("extracted_price", "")
+                if extracted_price:
+                    extracted_price = f"{extracted_price} {source.get('extracted_unit', '')}"
+                writer.writerow([title, url, raw_text, date, extracted_price])
 
 
 if __name__ == "__main__":
     agent = PriceResearchAgent()
     result = agent.research_price(
         country_of_origin="QA",
-        country_of_destination="PK",
         description="LOW DENSITY POLYETHYLENE (LDPE) LOTRENE MG70",
         quantity=500,
         unit_of_measure="kg"
     )
     print(json.dumps(agent.to_dict(result), indent=2))
+    print("\nResults saved to results.csv")
